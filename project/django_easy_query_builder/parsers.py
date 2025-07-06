@@ -1,5 +1,4 @@
 import re
-from django.db.models import Q
 
 class SimpleQueryParser:
     def __init__(self, query):
@@ -7,7 +6,6 @@ class SimpleQueryParser:
         self.tokens = []
         self.pos = 0
 
-    # ⬅︎ 1) add "~" to the token pattern
     def tokenize(self):
         pattern = r'Q\([^\)]*\)|[&|()~]'
         self.tokens = re.findall(pattern, self.query)
@@ -22,7 +20,6 @@ class SimpleQueryParser:
         while self.pos < len(self.tokens):
             token = self.tokens[self.pos]
 
-            # ⬅︎ 2) handle unary NOT
             if token == '~':
                 self.pos += 1
                 # next piece can be a Q(...) OR a parenthesised group
@@ -77,10 +74,50 @@ class SimpleQueryParser:
         return self._parse_atom(inner)
 
 
-# ------------------------------------------------------------------
-# Example usage
+from django.db.models import Q
 
-query = "~Q(a=5)&(Q(b__gt=6|c=7)|~Q(d__lt=8&e__exact=9))"
-parser = SimpleQueryParser(query)
-tree = parser.parse()
-print("PARSED TREE →", tree)
+def build_q(filter_tree):
+    if isinstance(filter_tree, dict):
+        if 'not' in filter_tree:
+            return ~build_q(filter_tree['not'])
+        elif 'and' in filter_tree:
+            return combine_q_list(filter_tree['and'], '&')
+        elif 'or' in filter_tree:
+            return combine_q_list(filter_tree['or'], '|')
+        else:
+            # it's a simple condition
+            # example: {'a': '5'}
+            key, value = next(iter(filter_tree.items()))
+            return Q(**{key: value})
+    elif isinstance(filter_tree, list):
+        q = None
+        current_op = '&'  # default
+
+        for item in filter_tree:
+            if isinstance(item, dict) and 'op' in item:
+                current_op = item['op']
+            else:
+                new_q = build_q(item)
+                if q is None:
+                    q = new_q
+                else:
+                    if current_op == '&':
+                        q &= new_q
+                    elif current_op == '|':
+                        q |= new_q
+        return q
+    else:
+        raise ValueError(f"Unsupported filter structure: {filter_tree}")
+
+def combine_q_list(filters, op):
+    q = None
+    for f in filters:
+        part_q = build_q(f)
+        if q is None:
+            q = part_q
+        else:
+            if op == '&':
+                q &= part_q
+            elif op == '|':
+                q |= part_q
+    return q

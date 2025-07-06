@@ -1,7 +1,7 @@
 from django.contrib.admin.options import csrf_protect_m
 from django.http import HttpRequest
 
-from django_easy_query_builder.types import QueryBuilderModelAdminMixinProtocol
+from django_easy_query_builder.project_types import QueryBuilderModelAdminMixinProtocol
 
 
 class QueryBuilderAdminMixin:
