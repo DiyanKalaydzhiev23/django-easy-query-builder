@@ -16,7 +16,7 @@ query = "~Q(first_name=Ivan)&(Q(last_name=Petrov|age__gt=18&age__lt=65)|Q(email_
 parser = SimpleQueryParser(query)
 tree = parser.parse()
 print("PARSED TREE →", tree)
-validator = QTreeValidator(['first_name', 'last_name', 'age', 'email'])
+validator = QTreeValidator(["first_name", "last_name", "age", "email"])
 validator.validate(tree)
 my_q = build_q(tree)
 pprint([p.__dict__ for p in Person.objects.filter(my_q)])

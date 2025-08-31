@@ -1,21 +1,43 @@
+from typing import List, Set, Tuple
+
+from django_easy_query_builder.parsers import FilterNode
+
+
 class QTreeValidator:
-    ALLOWED_LOOKUPS = {
-        "exact", "iexact", "in", "gt", "gte", "lt", "lte",
-        "contains", "icontains", "startswith", "istartswith",
-        "endswith", "iendswith", "range", "isnull", "date",
-        "year", "month", "day", "week_day",
+    ALLOWED_LOOKUPS: Set[str] = {
+        "exact",
+        "iexact",
+        "in",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "contains",
+        "icontains",
+        "startswith",
+        "istartswith",
+        "endswith",
+        "iendswith",
+        "range",
+        "isnull",
+        "date",
+        "year",
+        "month",
+        "day",
+        "week_day",
     }
 
     """
     Validate a parsed Q tree produced by SimpleQueryParser.
     """
-    def __init__(self, allowed_fields):
+
+    def __init__(self: "QTreeValidator", allowed_fields: List[str]) -> None:
         self.allowed_fields = set(allowed_fields)
 
-    def validate(self, node):
+    def validate(self: "QTreeValidator", node: FilterNode) -> None:
         self._walk(node)
 
-    def _walk(self, node):
+    def _walk(self: "QTreeValidator", node: FilterNode) -> None:
         if isinstance(node, list):
             for part in node:
                 # skip {'op': '&'} / {'op': '|'}
@@ -26,7 +48,8 @@ class QTreeValidator:
 
         if isinstance(node, dict):
             if "not" in node:
-                self._walk(node["not"]);  return
+                self._walk(node["not"])
+                return
             if "and" in node:
                 for child in node["and"]:
                     self._walk(child)
@@ -48,7 +71,7 @@ class QTreeValidator:
         # anything else is unexpected
         raise ValueError(f"Unexpected tree node: {node!r}")
 
-    def _split_field(self, field: str):
+    def _split_field(self: "QTreeValidator", field: str) -> Tuple[str, str]:
         """
         Split "author__email__icontains"  →
         base='author', lookup='icontains'
@@ -60,10 +83,10 @@ class QTreeValidator:
             return parts[0], "exact"
         return parts[0], parts[-1]
 
-    def _check_field(self, base: str):
+    def _check_field(self: "QTreeValidator", base: str) -> None:
         if base not in self.allowed_fields:
             raise ValueError(f"Field '{base}' is not allowed.")
 
-    def _check_lookup(self, lookup: str):
+    def _check_lookup(self: "QTreeValidator", lookup: str) -> None:
         if lookup not in self.ALLOWED_LOOKUPS:
             raise ValueError(f"Lookup '{lookup}' is not permitted.")

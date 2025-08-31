@@ -1,4 +1,5 @@
-from typing import Protocol
+from typing import Any, Dict, List, Protocol, Union
+
 from django.contrib.admin.options import csrf_protect_m
 from django.db import models
 from django.http import HttpRequest
@@ -9,16 +10,21 @@ class ModelAdminProtocol(Protocol):
     model: models.Model
 
     @csrf_protect_m
-    def changelist_view(self, request: HttpRequest, extra_context: dict=None) -> TemplateResponse:
-        ...
+    def changelist_view(
+        self: "ModelAdminProtocol",
+        request: HttpRequest,
+        extra_context: Union[Dict[str, Any], None] = None,
+    ) -> TemplateResponse: ...
 
 
 class QueryBuilderAdminMixinProtocol(Protocol):
-    query_builder_fields: list[str]
+    query_builder_fields: List[str]
 
-    def get_query_builder_fields_mapping(self) -> list[dict]:
-        ...
+    def get_query_builder_fields_mapping(
+        self: "QueryBuilderAdminMixinProtocol",
+    ) -> List[Dict[str, Any]]: ...
 
 
-class QueryBuilderModelAdminMixinProtocol(ModelAdminProtocol, QueryBuilderAdminMixinProtocol):
-    ...
+class QueryBuilderModelAdminMixinProtocol(
+    ModelAdminProtocol, QueryBuilderAdminMixinProtocol
+): ...
