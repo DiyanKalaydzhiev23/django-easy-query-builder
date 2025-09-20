@@ -4,10 +4,12 @@ from pprint import pprint
 import django
 from django.db.models import Q
 
+from django_easy_query_builder.builders import QueryBuilder
+
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "project.settings")
 django.setup()
 
-from django_easy_query_builder.parsers import SimpleQueryParser, build_q
+from django_easy_query_builder.parsers import SimpleQueryParser
 from django_easy_query_builder.validators import QTreeValidator
 from examples.models import Person
 
@@ -20,7 +22,8 @@ validator = QTreeValidator(
     ["first_name", "last_name", "cars__manufacturer__country__name"]
 )
 validator.validate(tree)
-my_q = build_q(tree)
+query_builder = QueryBuilder()
+my_q = query_builder.build_q(tree)
 original_q = Q(cars__manufacturer__country__name="Germany")
 # Assuming there is only one John Doe with a Toyota
 people = Person.objects.filter(my_q)

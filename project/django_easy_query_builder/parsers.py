@@ -1,8 +1,6 @@
 import re
 from typing import Any, Dict, List, Union
 
-from django.db.models import Q
-
 FilterNode = Union[List["FilterNode"], Dict[str, Any]]
 
 
@@ -83,51 +81,3 @@ class SimpleQueryParser:
         if "&" in inner:
             return {"and": [self._parse_atom(p) for p in split_by("&", inner)]}
         return self._parse_atom(inner)
-
-
-def build_q(filter_tree: FilterNode) -> Q:
-    if isinstance(filter_tree, dict):
-        if "not" in filter_tree:
-            return ~build_q(filter_tree["not"])
-        elif "and" in filter_tree:
-            return combine_q_list(filter_tree["and"], "&")
-        elif "or" in filter_tree:
-            return combine_q_list(filter_tree["or"], "|")
-        else:
-            # it's a simple condition
-            # example: {'a': '5'}
-            key, value = next(iter(filter_tree.items()))
-            return Q(**{key: value})
-    elif isinstance(filter_tree, list):
-        q = Q()
-        current_op = "&"  # default
-
-        for item in filter_tree:
-            if isinstance(item, dict) and "op" in item:
-                current_op = item["op"]
-            else:
-                new_q = build_q(item)
-                if not q:
-                    q = new_q
-                else:
-                    if current_op == "&":
-                        q &= new_q
-                    elif current_op == "|":
-                        q |= new_q
-        return q
-    else:
-        raise ValueError(f"Unsupported filter structure: {filter_tree}")
-
-
-def combine_q_list(filters: List[FilterNode], op: str) -> Q:
-    q = Q()
-    for f in filters:
-        part_q = build_q(f)
-        if not q:
-            q = part_q
-        else:
-            if op == "&":
-                q &= part_q
-            elif op == "|":
-                q |= part_q
-    return q

@@ -31,13 +31,13 @@ class QTreeValidator:
     Validate a parsed Q tree produced by SimpleQueryParser.
     """
 
-    def __init__(self: "QTreeValidator", allowed_fields: List[str]) -> None:
+    def __init__(self, allowed_fields: List[str]) -> None:
         self.allowed_fields = set(allowed_fields)
 
-    def validate(self: "QTreeValidator", node: FilterNode) -> None:
+    def validate(self, node: FilterNode) -> None:
         self._walk(node)
 
-    def _walk(self: "QTreeValidator", node: FilterNode) -> None:
+    def _walk(self, node: FilterNode) -> None:
         if isinstance(node, list):
             for part in node:
                 # skip {'op': '&'} / {'op': '|'}
@@ -71,7 +71,7 @@ class QTreeValidator:
         # anything else is unexpected
         raise ValueError(f"Unexpected tree node: {node!r}")
 
-    def _split_field(self: "QTreeValidator", field: str) -> Tuple[List[str], str]:
+    def _split_field(self, field: str) -> Tuple[List[str], str]:
         """
         Split "author__email__icontains"  →
         path=['author', 'email'], lookup='icontains'
@@ -91,7 +91,7 @@ class QTreeValidator:
 
         return parts, lookup
 
-    def _check_field(self: "QTreeValidator", path: List[str]) -> None:
+    def _check_field(self, path: List[str]) -> None:
         if "__".join(path) in self.allowed_fields:
             return
 
@@ -102,6 +102,6 @@ class QTreeValidator:
                     f"Field '{segment}' in path '{path_repr}' is not allowed."
                 )
 
-    def _check_lookup(self: "QTreeValidator", lookup: str) -> None:
+    def _check_lookup(self, lookup: str) -> None:
         if lookup not in self.ALLOWED_LOOKUPS:
             raise ValueError(f"Lookup '{lookup}' is not permitted.")
