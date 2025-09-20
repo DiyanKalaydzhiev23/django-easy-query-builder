@@ -89,4 +89,5 @@ The allowed lookups are:
 *   Add support for more field types.
 *   Add the js client
 *   Add more support for relations
+*   Views to save search queries
 *
