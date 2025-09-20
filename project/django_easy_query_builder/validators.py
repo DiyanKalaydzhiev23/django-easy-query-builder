@@ -63,29 +63,44 @@ class QTreeValidator:
 
             # atomic   {'field__lookup': 'value'}
             field, _ = next(iter(node.items()))
-            base, lookup = self._split_field(field)
-            self._check_field(base)
+            path, lookup = self._split_field(field)
+            self._check_field(path)
             self._check_lookup(lookup)
             return
 
         # anything else is unexpected
         raise ValueError(f"Unexpected tree node: {node!r}")
 
-    def _split_field(self: "QTreeValidator", field: str) -> Tuple[str, str]:
+    def _split_field(self: "QTreeValidator", field: str) -> Tuple[List[str], str]:
         """
         Split "author__email__icontains"  →
-        base='author', lookup='icontains'
+        path=['author', 'email'], lookup='icontains'
 
         If there is no __lookup part, default lookup is 'exact'.
         """
         parts = field.split("__")
-        if len(parts) == 1:
-            return parts[0], "exact"
-        return parts[0], parts[-1]
+        if not parts:
+            raise ValueError("Field name cannot be empty.")
 
-    def _check_field(self: "QTreeValidator", base: str) -> None:
-        if base not in self.allowed_fields:
-            raise ValueError(f"Field '{base}' is not allowed.")
+        lookup = "exact"
+        if len(parts) > 1 and parts[-1] in self.ALLOWED_LOOKUPS:
+            lookup = parts.pop()
+
+        if not parts:
+            raise ValueError("Field path cannot consist solely of a lookup.")
+
+        return parts, lookup
+
+    def _check_field(self: "QTreeValidator", path: List[str]) -> None:
+        if "__".join(path) in self.allowed_fields:
+            return
+
+        for segment in path:
+            if segment not in self.allowed_fields:
+                path_repr = "__".join(path)
+                raise ValueError(
+                    f"Field '{segment}' in path '{path_repr}' is not allowed."
+                )
 
     def _check_lookup(self: "QTreeValidator", lookup: str) -> None:
         if lookup not in self.ALLOWED_LOOKUPS:
