@@ -4,18 +4,17 @@ from pprint import pprint
 import django
 from django.db.models import Q
 
-from django_easy_query_builder.builders import QueryBuilder
-
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "project.settings")
 django.setup()
 
-from django_easy_query_builder.parsers import SimpleQueryParser
+from django_easy_query_builder.builders import QueryBuilder
+from django_easy_query_builder.parsers import QueryParser
 from django_easy_query_builder.validators import QTreeValidator
 from examples.models import Person
 
 # Query for a specific person and their car's manufacturer
 query = "Q(cars__manufacturer__country__name=Germany)"
-parser = SimpleQueryParser(query)
+parser = QueryParser(query)
 tree = parser.parse()
 print("PARSED TREE →", tree)
 validator = QTreeValidator(

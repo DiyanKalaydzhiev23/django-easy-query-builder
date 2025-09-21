@@ -11,12 +11,12 @@ django.setup()
 
 
 # query = "~Q(a=5)&(Q(b__gt=6|c=7)|~Q(d__lt=8&e__exact=9))"
-from django_easy_query_builder.parsers import SimpleQueryParser
+from django_easy_query_builder.parsers import QueryParser
 from django_easy_query_builder.validators import QTreeValidator
 from examples.models import Person
 
 query = "~Q(first_name=Ivan)&(Q(last_name=Petrov|age__gt=18&age__lt=65)|Q(email__icontains=example.com))"
-parser = SimpleQueryParser(query)
+parser = QueryParser(query)
 query_builder = QueryBuilder()
 tree = parser.parse()
 print("PARSED TREE →", tree)

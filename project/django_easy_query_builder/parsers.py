@@ -4,80 +4,99 @@ from typing import Any, Dict, List, Union
 FilterNode = Union[List["FilterNode"], Dict[str, Any]]
 
 
-class SimpleQueryParser:
-    def __init__(self: "SimpleQueryParser", query: str) -> None:
+class QueryParser:
+    def __init__(self, query: str) -> None:
         self.query = query
         self.tokens: List[str] = []
         self.pos = 0
+        self._token_handlers = {
+            "~": self._handle_not,
+            "(": self._handle_group,
+            "&": lambda: self._handle_operator("&"),
+            "|": lambda: self._handle_operator("|"),
+        }
 
-    def tokenize(self: "SimpleQueryParser") -> List[str]:
+    def tokenize(self) -> List[str]:
         pattern = r"Q\([^\)]*\)|[&|()~]"
         self.tokens = re.findall(pattern, self.query)
         return self.tokens
 
-    def parse(self: "SimpleQueryParser") -> FilterNode:
+    def parse(self) -> FilterNode:
         self.tokenize()
         return self.parse_expression()
 
-    def parse_expression(self: "SimpleQueryParser") -> FilterNode:
-        nodes = []
+    def parse_expression(self) -> FilterNode:
+        nodes: List[FilterNode] = []
+
         while self.pos < len(self.tokens):
             token = self.tokens[self.pos]
 
-            if token == "~":
-                self.pos += 1
-                # next piece can be a Q(...) OR a parenthesised group
-                if self.tokens[self.pos].startswith("Q("):
-                    nodes.append({"not": self.parse_condition()})
-                elif self.tokens[self.pos] == "(":
-                    self.pos += 1  # skip '('
-                    nodes.append({"not": self.parse_expression()})
-                else:
-                    raise SyntaxError("~ must precede Q(...) or ( ... )")
-                continue
-
             if token.startswith("Q("):
                 nodes.append(self.parse_condition())
-            elif token == "(":
-                self.pos += 1
-                nodes.append(self.parse_expression())
-            elif token == ")":
+                continue
+
+            if token == ")":
                 self.pos += 1
                 break
-            elif token in ["&", "|"]:
-                nodes.append({"op": token})
-                self.pos += 1
-            else:
+
+            handler = self._token_handlers.get(token)
+
+            if handler is None:
                 raise SyntaxError(f"Unknown token {token}")
+
+            nodes.append(handler())
         return nodes
 
-    # ------------ helpers ------------
-    def _parse_atom(self: "SimpleQueryParser", cond: str) -> Dict[str, str]:
+    def _handle_not(self) -> Dict[str, FilterNode]:
+        self.pos += 1
+
+        if self.pos >= len(self.tokens):
+            raise SyntaxError("~ must precede Q(...) or ( ... )")
+
+        next_token = self.tokens[self.pos]
+
+        if next_token.startswith("Q("):
+            return {"not": self.parse_condition()}
+        if next_token == "(":
+            self.pos += 1
+            return {"not": self.parse_expression()}
+
+        raise SyntaxError("~ must precede Q(...) or ( ... )")
+
+    def _handle_group(self) -> FilterNode:
+        self.pos += 1
+        return self.parse_expression()
+
+    def _handle_operator(self, token: str) -> Dict[str, str]:
+        self.pos += 1
+        return {"op": token}
+
+    def _parse_atom(self, cond: str) -> Dict[str, str]:
         if "=" not in cond:
             raise SyntaxError(f"Missing '=' in {cond!r}")
+
         key, val = cond.split("=", 1)
+
         return {key.strip(): val.strip()}
 
-    def parse_condition(self: "SimpleQueryParser") -> Dict[str, Any]:
-        token = self.tokens[self.pos]  # Q(a=5&b=6|c=7)
+    def parse_condition(self) -> Dict[str, Any]:
+        token = self.tokens[self.pos]
         self.pos += 1
-        inner = token[2:-1]  # strip Q( ... )
+        inner = token[2:-1]
 
-        def split_by(op: str, s: str) -> List[str]:
-            return [p.strip() for p in s.split(op) if p.strip()]
+        disjunctions = self._split(inner, "|")
+        if len(disjunctions) > 1:
+            return {"or": [self._parse_conjunction(part) for part in disjunctions]}
 
-        if "|" in inner:
-            parts = split_by("|", inner)
-            return {
-                "or": [
-                    (
-                        self._parse_atom(p)
-                        if "&" not in p
-                        else {"and": [self._parse_atom(x) for x in split_by("&", p)]}
-                    )
-                    for p in parts
-                ]
-            }
-        if "&" in inner:
-            return {"and": [self._parse_atom(p) for p in split_by("&", inner)]}
-        return self._parse_atom(inner)
+        return self._parse_conjunction(inner)
+
+    def _parse_conjunction(self, expr: str) -> Dict[str, Any]:
+        conjunctions = self._split(expr, "&")
+
+        if len(conjunctions) > 1:
+            return {"and": [self._parse_atom(part) for part in conjunctions]}
+
+        return self._parse_atom(expr)
+
+    def _split(self, text: str, delimiter: str) -> List[str]:
+        return [segment.strip() for segment in text.split(delimiter) if segment.strip()]
