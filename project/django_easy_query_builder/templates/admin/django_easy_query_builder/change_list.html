@@ -1,0 +1,67 @@
+{% extends "admin/change_list.html" %}
+{% load static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'django_easy_query_builder/query_builder.css' %}">
+{% endblock %}
+
+{% block extrahead %}
+{{ block.super }}
+{{ query_builder_frontend_config|json_script:"advanced-query-builder-config" }}
+<script src="{% static 'django_easy_query_builder/query_builder.js' %}" defer></script>
+{% endblock %}
+
+{% block search %}
+<div class="advanced-query-builder-admin" style="margin-bottom: 1.5rem;">
+  <div class="page-inner">
+    <div class="layout">
+      <section class="card">
+        <div class="card-header">
+          <div class="card-header-top">
+            <h2 class="card-title">Advanced Query Builder</h2>
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+              <button id="advanced-query-apply" class="btn btn-sm" type="button">Apply Query</button>
+              <button id="advanced-query-clear" class="btn btn-outline btn-sm" type="button">Clear Query</button>
+              <button
+                id="preview-toggle"
+                class="btn btn-outline btn-sm"
+                type="button"
+                aria-expanded="false"
+                aria-controls="preview-wrapper"
+              >
+                Show Preview
+              </button>
+            </div>
+          </div>
+          <p class="card-description">Build nested filters and apply them to this changelist.</p>
+        </div>
+        <div class="card-content">
+          <div id="query-root"></div>
+        </div>
+      </section>
+
+      <section id="preview-wrapper" class="preview-wrapper is-hidden" aria-hidden="true">
+        <div class="card preview-card">
+          <div class="card-header">
+            <h2 class="card-title">Query Preview</h2>
+          </div>
+          <div class="card-content preview-content">
+            <div class="preview-section">
+              <h3 class="preview-heading">Readable Format</h3>
+              <pre id="readable-preview" class="code-block">No conditions defined</pre>
+            </div>
+            <div class="preview-section">
+              <h3 class="preview-heading">Django ORM (Generated)</h3>
+              <pre id="django-preview" class="code-block">from django.db.models import Q
+
+query = Q()</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+{{ block.super }}
+{% endblock %}

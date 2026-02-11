@@ -1,7 +1,49 @@
+import json
 import re
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 FilterNode = Union[List["FilterNode"], Dict[str, Any]]
+
+ALLOWED_DJANGO_OPERATORS = {
+    "exact",
+    "iexact",
+    "contains",
+    "icontains",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "in",
+    "isnull",
+    "startswith",
+    "istartswith",
+    "endswith",
+    "iendswith",
+    "range",
+    "date",
+    "year",
+    "month",
+}
+
+FRONTEND_OPERATOR_LOOKUPS = {
+    "equals": "exact",
+    "not_equals": "exact",
+    "contains": "contains",
+    "not_contains": "contains",
+    "greater_than": "gt",
+    "less_than": "lt",
+    "in": "in",
+    "not_in": "in",
+}
+
+NEGATED_FRONTEND_OPERATORS = {"not_equals", "not_contains", "not_in"}
+
+_SUPPORTED_TRANSFORMS = {"count", "sum", "avg", "min", "max"}
+
+_FIELD_SEGMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+ScalarValue = Union[str, int, float, bool, None]
+NormalizedValue = Union[ScalarValue, List[ScalarValue]]
 
 
 class QueryParser:
@@ -100,3 +142,335 @@ class QueryParser:
 
     def _split(self, text: str, delimiter: str) -> List[str]:
         return [segment.strip() for segment in text.split(delimiter) if segment.strip()]
+
+
+class StructuredQueryParser:
+    """
+    Parse the frontend JSON query builder payload into the internal FilterNode tree.
+    """
+
+    _GROUP_KEYS = {
+        "id",
+        "logicalOperator",
+        "operators",
+        "conditions",
+        "groups",
+        "negated",
+    }
+    _CONDITION_KEYS = {
+        "id",
+        "field",
+        "operator",
+        "value",
+        "negated",
+        "transforms",
+        "isVariableOnly",
+        "fieldRef",
+        "query",
+    }
+    _TRANSFORM_KEYS = {"id", "value"}
+    _FIELD_REF_KEYS = {"type", "transformId"}
+    _SUBQUERY_OPERATORS = {"exists", "not_exists"}
+
+    _TEXTUAL_FIELD_TYPES = {
+        "CharField",
+        "TextField",
+        "EmailField",
+        "SlugField",
+        "URLField",
+    }
+
+    def __init__(
+        self,
+        query: Union[str, Dict[str, Any]],
+        field_types: Optional[Dict[str, str]] = None,
+    ) -> None:
+        self.query = query
+        self.field_types = field_types or {}
+
+    def parse(self) -> FilterNode:
+        payload = self._decode_payload(self.query)
+        if not isinstance(payload, dict):
+            raise SyntaxError("Top-level advanced query must be a JSON object.")
+        return self._parse_group(payload)
+
+    def _decode_payload(self, payload: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
+        if isinstance(payload, dict):
+            return payload
+
+        if not isinstance(payload, str):
+            raise SyntaxError("Advanced query payload must be a JSON string.")
+
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise SyntaxError("Invalid JSON payload for advanced query.") from exc
+
+        if not isinstance(decoded, dict):
+            raise SyntaxError("Advanced query JSON payload must be an object.")
+
+        return decoded
+
+    def _parse_group(self, group: Dict[str, Any]) -> FilterNode:
+        self._validate_keys(group, self._GROUP_KEYS, "group")
+
+        logical_operator = group.get("logicalOperator", "AND")
+        if logical_operator not in {"AND", "OR"}:
+            raise SyntaxError("group.logicalOperator must be 'AND' or 'OR'.")
+
+        negated = bool(group.get("negated", False))
+        operators = group.get("operators")
+        parsed_operators: Optional[List[str]] = None
+        if operators is not None:
+            if not isinstance(operators, list):
+                raise SyntaxError("group.operators must be a list when provided.")
+
+            parsed_operators = []
+            for operator in operators:
+                if operator not in {"AND", "OR"}:
+                    raise SyntaxError("group.operators values must be 'AND' or 'OR'.")
+                parsed_operators.append(operator)
+
+        conditions = group.get("conditions", [])
+        if not isinstance(conditions, list):
+            raise SyntaxError("group.conditions must be a list.")
+
+        groups = group.get("groups", [])
+        if not isinstance(groups, list):
+            raise SyntaxError("group.groups must be a list.")
+
+        parsed_items: List[FilterNode] = []
+
+        for condition in conditions:
+            parsed_condition = self._parse_condition(condition)
+            if parsed_condition is not None:
+                parsed_items.append(parsed_condition)
+
+        for child_group in groups:
+            if not isinstance(child_group, dict):
+                raise SyntaxError("Each nested group must be an object.")
+            parsed_items.append(self._parse_group(child_group))
+
+        return self._combine_items(
+            parsed_items,
+            logical_operator,
+            negated,
+            parsed_operators,
+        )
+
+    def _combine_items(
+        self,
+        items: List[FilterNode],
+        logical_operator: str,
+        negated: bool,
+        operators: Optional[List[str]] = None,
+    ) -> FilterNode:
+        if operators is not None and len(operators) != max(len(items) - 1, 0):
+            raise SyntaxError(
+                "group.operators length must equal number of item boundaries."
+            )
+
+        combined: List[FilterNode] = []
+        for index, item in enumerate(items):
+            if index > 0:
+                if operators is None:
+                    operator = logical_operator
+                else:
+                    operator = operators[index - 1]
+                symbol = "&" if operator == "AND" else "|"
+                combined.append({"op": symbol})
+            combined.append(item)
+
+        if negated:
+            return {"not": combined}
+
+        return combined
+
+    def _parse_condition(self, condition: object) -> Union[FilterNode, None]:
+        if not isinstance(condition, dict):
+            raise SyntaxError("Each condition must be an object.")
+
+        self._validate_keys(condition, self._CONDITION_KEYS, "condition")
+        self._validate_optional_frontend_metadata(condition)
+
+        if condition.get("query") is not None:
+            return self._parse_subquery_condition(condition)
+
+        if bool(condition.get("isVariableOnly", False)):
+            return None
+
+        field = condition.get("field")
+        if not isinstance(field, str) or not field.strip():
+            raise SyntaxError(
+                "condition.field is required and must be a non-empty string."
+            )
+
+        operator = condition.get("operator", "equals")
+        if not isinstance(operator, str):
+            raise SyntaxError("condition.operator must be a string.")
+
+        field_path = self._to_django_path(field)
+        lookup, is_negated_operator = self._resolve_operator(operator, field_path)
+        value = self._normalize_value(lookup, condition.get("value", ""))
+        key = field_path if lookup == "exact" else f"{field_path}__{lookup}"
+        node: FilterNode = {key: value}
+
+        should_negate = bool(condition.get("negated", False)) ^ is_negated_operator
+        if should_negate:
+            return {"not": node}
+
+        return node
+
+    def _parse_subquery_condition(self, condition: Dict[str, Any]) -> FilterNode:
+        field = condition.get("field")
+        if not isinstance(field, str) or not field.strip():
+            raise SyntaxError("Subquery condition requires a non-empty 'field'.")
+
+        query_group = condition.get("query")
+        if not isinstance(query_group, dict):
+            raise SyntaxError("Subquery condition requires a nested 'query' object.")
+
+        operator = condition.get("operator", "exists")
+        if not isinstance(operator, str) or operator not in self._SUBQUERY_OPERATORS:
+            raise SyntaxError("Subquery operator must be 'exists' or 'not_exists'.")
+
+        relation_path = self._to_django_path(field)
+        parsed_query = self._parse_group(query_group)
+
+        node: FilterNode = {
+            "subquery": {
+                "relation": relation_path,
+                "query": parsed_query,
+            }
+        }
+
+        should_negate = bool(condition.get("negated", False)) ^ (
+            operator == "not_exists"
+        )
+        if should_negate:
+            return {"not": node}
+
+        return node
+
+    def _resolve_operator(self, operator: str, field_path: str) -> tuple[str, bool]:
+        if operator in {"equals", "not_equals"} and self._is_textual_field(field_path):
+            return "iexact", operator in NEGATED_FRONTEND_OPERATORS
+
+        if operator in FRONTEND_OPERATOR_LOOKUPS:
+            return (
+                FRONTEND_OPERATOR_LOOKUPS[operator],
+                operator in NEGATED_FRONTEND_OPERATORS,
+            )
+
+        if operator in ALLOWED_DJANGO_OPERATORS:
+            return operator, False
+
+        raise SyntaxError(f"Unsupported operator '{operator}'.")
+
+    def _is_textual_field(self, field_path: str) -> bool:
+        field_type = self.field_types.get(field_path)
+        return field_type in self._TEXTUAL_FIELD_TYPES
+
+    def _normalize_value(self, lookup: str, value: object) -> NormalizedValue:
+        if lookup in {"in", "range"}:
+            normalized_values = self._normalize_list_value(value)
+            if lookup == "range" and len(normalized_values) != 2:
+                raise SyntaxError("range operator requires exactly two values.")
+            return normalized_values
+
+        if lookup == "isnull":
+            return self._normalize_bool(value)
+
+        if isinstance(value, (dict, list)):
+            raise SyntaxError("Condition value must be scalar for this operator.")
+
+        if isinstance(value, str):
+            return value.strip()
+
+        return value
+
+    def _normalize_list_value(self, value: object) -> List[ScalarValue]:
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+
+        if isinstance(value, list):
+            normalized: List[ScalarValue] = []
+            for item in value:
+                if isinstance(item, (dict, list)):
+                    raise SyntaxError(
+                        "in/range operators accept only scalar list values."
+                    )
+                if isinstance(item, str):
+                    normalized.append(item.strip())
+                elif isinstance(item, (int, float, bool)) or item is None:
+                    normalized.append(item)
+                else:
+                    normalized.append(str(item))
+            return normalized
+
+        raise SyntaxError(
+            "in/range operators require a list or comma-separated string value."
+        )
+
+    def _normalize_bool(self, value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "1"}:
+                return True
+            if lowered in {"false", "0"}:
+                return False
+
+        raise SyntaxError("isnull operator requires a boolean value.")
+
+    def _validate_optional_frontend_metadata(self, condition: Dict[str, Any]) -> None:
+        transforms = condition.get("transforms")
+        if transforms is not None:
+            if not isinstance(transforms, list):
+                raise SyntaxError("condition.transforms must be a list when provided.")
+            for transform in transforms:
+                if not isinstance(transform, dict):
+                    raise SyntaxError("Each transform must be an object.")
+                self._validate_keys(transform, self._TRANSFORM_KEYS, "transform")
+                transform_value = transform.get("value")
+                if (
+                    transform_value is not None
+                    and transform_value not in _SUPPORTED_TRANSFORMS
+                ):
+                    raise SyntaxError(f"Unsupported transform '{transform_value}'.")
+
+        field_ref = condition.get("fieldRef")
+        if field_ref is not None:
+            if not isinstance(field_ref, dict):
+                raise SyntaxError("condition.fieldRef must be an object when provided.")
+            self._validate_keys(field_ref, self._FIELD_REF_KEYS, "fieldRef")
+            field_ref_type = field_ref.get("type")
+            if field_ref_type is not None and field_ref_type != "alias":
+                raise SyntaxError(
+                    "condition.fieldRef.type must be 'alias' when provided."
+                )
+
+    def _to_django_path(self, field: str) -> str:
+        orm_path = field.strip().replace(".", "__")
+        if not orm_path:
+            raise SyntaxError("Field path cannot be empty.")
+
+        parts = orm_path.split("__")
+        if any(not part for part in parts):
+            raise SyntaxError("Field path contains an empty segment.")
+
+        for part in parts:
+            if not _FIELD_SEGMENT_RE.match(part):
+                raise SyntaxError(f"Invalid field path segment '{part}'.")
+
+        return orm_path
+
+    def _validate_keys(
+        self, payload: Dict[str, Any], allowed_keys: set[str], context: str
+    ) -> None:
+        unknown = set(payload.keys()) - allowed_keys
+        if unknown:
+            unknown_list = ", ".join(sorted(unknown))
+            raise SyntaxError(f"Unknown keys in {context}: {unknown_list}")
