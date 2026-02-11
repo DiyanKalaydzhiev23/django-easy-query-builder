@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from django.contrib.admin.options import csrf_protect_m
 from django.contrib.admin.views.main import ChangeList
