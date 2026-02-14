@@ -4,7 +4,7 @@ from datetime import date
 import pytest
 from django.contrib.auth import get_user_model
 
-from examples.models import Person
+from examples.models import Car, Country, Manufacturer, Person
 
 
 @pytest.fixture
@@ -114,3 +114,90 @@ def test_admin_changelist_invalid_filter_does_not_crash(admin_client) -> None:
     )
 
     assert response.status_code == 200
+
+
+@pytest.mark.django_db
+def test_admin_changelist_applies_count_transform_filter(admin_client) -> None:
+    country = Country.objects.create(name="Germany")
+    manufacturer = Manufacturer.objects.create(name="VW", country=country)
+    golf = Car.objects.create(
+        model="Golf",
+        manufacturer=manufacturer,
+        year=2020,
+        price="20000.00",
+        is_electric=False,
+    )
+    passat = Car.objects.create(
+        model="Passat",
+        manufacturer=manufacturer,
+        year=2021,
+        price="25000.00",
+        is_electric=False,
+    )
+
+    maria = Person.objects.create(
+        first_name="Maria",
+        last_name="Petrova",
+        age=30,
+        email="maria@example.com",
+        date_of_birth=date(1995, 1, 1),
+    )
+    maria.cars.add(golf, passat)
+
+    ivan = Person.objects.create(
+        first_name="Ivan",
+        last_name="Ivanov",
+        age=33,
+        email="ivan@example.com",
+        date_of_birth=date(1992, 1, 1),
+    )
+    ivan.cars.add(golf)
+
+    payload = {
+        "id": "group-1",
+        "logicalOperator": "AND",
+        "operators": [],
+        "negated": False,
+        "conditions": [
+            {
+                "id": "condition-transform",
+                "field": "cars",
+                "operator": "equals",
+                "value": "",
+                "negated": False,
+                "isVariableOnly": True,
+                "transforms": [{"id": "transform-count-cars", "value": "count"}],
+            },
+            {
+                "id": "condition-filter",
+                "field": "count_cars",
+                "fieldRef": {
+                    "type": "alias",
+                    "transformId": "transform-count-cars",
+                },
+                "operator": "greater_than",
+                "value": "1",
+                "negated": False,
+                "isVariableOnly": False,
+            },
+        ],
+        "groups": [],
+    }
+
+    response = admin_client.get(
+        "/admin/examples/person/",
+        {"advanced_query": json.dumps(payload)},
+    )
+    assert response.status_code == 200
+    assert {obj.id for obj in response.context["cl"].result_list} == {maria.id}
+
+    hydrated_payload = json.loads(
+        response.context["query_builder_frontend_config"]["initialQuery"]
+    )
+    second_response = admin_client.get(
+        "/admin/examples/person/",
+        {"advanced_query": json.dumps(hydrated_payload)},
+    )
+
+    assert second_response.status_code == 200
+    assert {obj.id for obj in second_response.context["cl"].result_list} == {maria.id}

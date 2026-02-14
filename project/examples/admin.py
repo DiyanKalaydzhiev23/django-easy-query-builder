@@ -13,6 +13,7 @@ class PersonAdmin(AdvancedSearchAdminMixin, admin.ModelAdmin):
         "date_of_birth",
         "email",
         "cars__manufacturer__country__name",
+        "cars",
     ]
     # Todo add all option for relations filtering
 
