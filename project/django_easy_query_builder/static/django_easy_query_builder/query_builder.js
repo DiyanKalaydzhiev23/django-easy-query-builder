@@ -80,6 +80,17 @@ const FRONTEND_OPERATOR_LOOKUPS = {
   not_in: "in",
 };
 
+const OPERATOR_ALIASES = {
+  eq: "exact",
+  ne: "exact",
+  starts_with: "startswith",
+  istarts_with: "istartswith",
+  i_starts_with: "istartswith",
+  ends_with: "endswith",
+  iends_with: "iendswith",
+  i_ends_with: "iendswith",
+};
+
 const LOOKUP_LABELS = {
   eq: "Equals",
   ne: "Not Equals",
@@ -132,12 +143,19 @@ function resolveOperatorSpec(rawOperator) {
     ? operatorValue.slice(2)
     : operatorValue;
 
-  if (withoutDunder === "eq") {
-    return { lookup: "exact", negated: false };
+  if (withoutDunder.startsWith("not_")) {
+    const lookup = withoutDunder.slice(4);
+    const resolvedLookup = OPERATOR_ALIASES[lookup] || lookup;
+    if (DJANGO_LOOKUP_SET.has(resolvedLookup)) {
+      return { lookup: resolvedLookup, negated: true };
+    }
   }
 
-  if (withoutDunder === "ne") {
-    return { lookup: "exact", negated: true };
+  if (Object.prototype.hasOwnProperty.call(OPERATOR_ALIASES, withoutDunder)) {
+    return {
+      lookup: OPERATOR_ALIASES[withoutDunder],
+      negated: withoutDunder === "ne",
+    };
   }
 
   if (Object.prototype.hasOwnProperty.call(FRONTEND_OPERATOR_LOOKUPS, withoutDunder)) {
@@ -147,19 +165,49 @@ function resolveOperatorSpec(rawOperator) {
     };
   }
 
-  if (withoutDunder.startsWith("not_")) {
-    const lookup = withoutDunder.slice(4);
-    if (DJANGO_LOOKUP_SET.has(lookup)) {
-      return { lookup, negated: true };
-    }
-  }
-
   if (DJANGO_LOOKUP_SET.has(withoutDunder)) {
     return { lookup: withoutDunder, negated: false };
   }
 
   return { lookup: "exact", negated: false };
 }
+
+function resolveAvailableOperatorOptions(config) {
+  const configured = config?.availableLookups;
+  if (!Array.isArray(configured) || configured.length === 0) {
+    return [...OPERATOR_OPTIONS];
+  }
+
+  const allowedLookups = new Set();
+  configured.forEach((rawLookup) => {
+    if (typeof rawLookup !== "string") return;
+    let lookup = rawLookup.trim();
+    if (!lookup) return;
+    if (lookup === "__all__") {
+      DJANGO_LOOKUPS.forEach((item) => allowedLookups.add(item));
+      return;
+    }
+    if (lookup.startsWith("__")) {
+      lookup = lookup.slice(2);
+    }
+    if (lookup === "eq" || lookup === "ne") {
+      lookup = "exact";
+    }
+    if (DJANGO_LOOKUP_SET.has(lookup)) {
+      allowedLookups.add(lookup);
+    }
+  });
+
+  if (allowedLookups.size === 0) {
+    return [...OPERATOR_OPTIONS];
+  }
+
+  return OPERATOR_OPTIONS.filter((option) =>
+    allowedLookups.has(resolveOperatorSpec(option.value).lookup)
+  );
+}
+
+const AVAILABLE_OPERATOR_OPTIONS = resolveAvailableOperatorOptions(BUILDER_CONFIG);
 
 const TRANSFORM_DEFINITIONS = [
   { value: "count", label: "COUNT", djangoName: "Count" },
@@ -528,7 +576,7 @@ function createCondition() {
     id: generateConditionId(),
     field: AVAILABLE_FIELDS[0] || "",
     fieldRef: null,
-    operator: "equals",
+    operator: AVAILABLE_OPERATOR_OPTIONS[0]?.value || "equals",
     value: "",
     negated: false,
     transforms: [],
@@ -549,6 +597,9 @@ function hydrateCondition(condition) {
   }
   if (typeof condition.operator === "string") {
     normalized.operator = condition.operator;
+  }
+  if (!AVAILABLE_OPERATOR_OPTIONS.some((option) => option.value === normalized.operator)) {
+    normalized.operator = AVAILABLE_OPERATOR_OPTIONS[0]?.value || "equals";
   }
   if (Array.isArray(condition.value)) {
     normalized.value = condition.value.join(", ");
@@ -1103,12 +1154,15 @@ function renderCondition(parentGroup, index) {
   row.appendChild(fieldSelect);
 
   const operatorSelect = document.createElement("select");
-  OPERATOR_OPTIONS.forEach((operator) => {
+  AVAILABLE_OPERATOR_OPTIONS.forEach((operator) => {
     const option = document.createElement("option");
     option.value = operator.value;
     option.textContent = operator.label;
     operatorSelect.appendChild(option);
   });
+  if (!AVAILABLE_OPERATOR_OPTIONS.some((option) => option.value === condition.operator)) {
+    condition.operator = AVAILABLE_OPERATOR_OPTIONS[0]?.value || "equals";
+  }
   operatorSelect.value = condition.operator;
   operatorSelect.addEventListener("change", (event) => {
     condition.operator = event.target.value;
@@ -1462,7 +1516,9 @@ function generateQueryString(group, indent = 0, isRoot = false) {
     }
     const operatorSpec = resolveOperatorSpec(condition.operator);
     const operatorLabel =
-      OPERATOR_OPTIONS.find((option) => option.value === condition.operator)?.label || condition.operator;
+      AVAILABLE_OPERATOR_OPTIONS.find((option) => option.value === condition.operator)?.label ||
+      OPERATOR_OPTIONS.find((option) => option.value === condition.operator)?.label ||
+      condition.operator;
     const transforms = normalizeConditionTransforms(condition);
     const transformMetas = transforms
       .map((transform) => derived.transformsById.get(transform.id))
@@ -1757,6 +1813,7 @@ if (typeof module !== "undefined" && module.exports) {
     applyAdvancedQuery,
     clearAdvancedQuery,
     OPERATOR_OPTIONS,
+    AVAILABLE_OPERATOR_OPTIONS,
     TRANSFORM_DEFINITIONS,
     TRANSFORM_MAP,
     TRANSFORM_OPTIONS,

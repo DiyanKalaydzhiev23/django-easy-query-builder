@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Union
 
 FilterNode = Union[List["FilterNode"], Dict[str, Any]]
 
-ALLOWED_DJANGO_OPERATORS = {
+DJANGO_OPERATOR_SEQUENCE = (
     "exact",
     "iexact",
     "contains",
@@ -23,7 +23,9 @@ ALLOWED_DJANGO_OPERATORS = {
     "date",
     "year",
     "month",
-}
+)
+
+ALLOWED_DJANGO_OPERATORS = set(DJANGO_OPERATOR_SEQUENCE)
 
 FRONTEND_OPERATOR_LOOKUPS = {
     "equals": "exact",
@@ -40,6 +42,12 @@ NEGATED_FRONTEND_OPERATORS = {"not_equals", "not_contains", "not_in"}
 OPERATOR_ALIASES = {
     "eq": "exact",
     "ne": "exact",
+    "starts_with": "startswith",
+    "istarts_with": "istartswith",
+    "i_starts_with": "istartswith",
+    "ends_with": "endswith",
+    "iends_with": "iendswith",
+    "i_ends_with": "iendswith",
 }
 NEGATED_OPERATOR_ALIASES = {"ne"}
 
@@ -189,9 +197,15 @@ class StructuredQueryParser:
         self,
         query: Union[str, Dict[str, Any]],
         field_types: Optional[Dict[str, str]] = None,
+        allowed_django_operators: Optional[set[str]] = None,
     ) -> None:
         self.query = query
         self.field_types = field_types or {}
+        self.allowed_django_operators = (
+            set(allowed_django_operators)
+            if allowed_django_operators is not None
+            else set(ALLOWED_DJANGO_OPERATORS)
+        )
 
     def parse(self) -> FilterNode:
         payload = self._decode_payload(self.query)
@@ -362,30 +376,50 @@ class StructuredQueryParser:
         if normalized_operator.startswith("__"):
             normalized_operator = normalized_operator[2:]
 
+        field_type = self.field_types.get(field_path)
+        if normalized_operator in {"date", "not_date"} and field_type == "DateField":
+            if "exact" in self.allowed_django_operators:
+                return "exact", normalized_operator == "not_date"
+            raise SyntaxError(f"Unsupported operator '{normalized_operator}'.")
+
+        if normalized_operator.startswith("not_"):
+            negated_target = normalized_operator[4:]
+            negated_lookup = OPERATOR_ALIASES.get(negated_target, negated_target)
+            if negated_lookup in self.allowed_django_operators:
+                return negated_lookup, True
+
         if normalized_operator in OPERATOR_ALIASES:
-            return (
-                OPERATOR_ALIASES[normalized_operator],
-                normalized_operator in NEGATED_OPERATOR_ALIASES,
-            )
+            lookup = OPERATOR_ALIASES[normalized_operator]
+            if lookup in self.allowed_django_operators:
+                return lookup, normalized_operator in NEGATED_OPERATOR_ALIASES
+            raise SyntaxError(f"Unsupported operator '{normalized_operator}'.")
 
         if normalized_operator in {"equals", "not_equals"} and self._is_textual_field(
             field_path
         ):
-            return "iexact", normalized_operator in NEGATED_FRONTEND_OPERATORS
+            preferred_lookup = (
+                "iexact" if "iexact" in self.allowed_django_operators else "exact"
+            )
+            if preferred_lookup in self.allowed_django_operators:
+                return (
+                    preferred_lookup,
+                    normalized_operator in NEGATED_FRONTEND_OPERATORS,
+                )
+            raise SyntaxError(f"Unsupported operator '{normalized_operator}'.")
 
         if normalized_operator in FRONTEND_OPERATOR_LOOKUPS:
-            return (
-                FRONTEND_OPERATOR_LOOKUPS[normalized_operator],
-                normalized_operator in NEGATED_FRONTEND_OPERATORS,
-            )
+            lookup = FRONTEND_OPERATOR_LOOKUPS[normalized_operator]
+            if lookup in self.allowed_django_operators:
+                return lookup, normalized_operator in NEGATED_FRONTEND_OPERATORS
+            raise SyntaxError(f"Unsupported operator '{normalized_operator}'.")
 
         if (
             normalized_operator.startswith("not_")
-            and normalized_operator[4:] in ALLOWED_DJANGO_OPERATORS
+            and normalized_operator[4:] in self.allowed_django_operators
         ):
             return normalized_operator[4:], True
 
-        if normalized_operator in ALLOWED_DJANGO_OPERATORS:
+        if normalized_operator in self.allowed_django_operators:
             return normalized_operator, False
 
         raise SyntaxError(f"Unsupported operator '{normalized_operator}'.")

@@ -7,10 +7,19 @@ class QTreeValidator:
     ALLOWED_LOOKUPS: Set[str] = set(ALLOWED_DJANGO_OPERATORS)
     _ALLOWED_SEQUENCE_OPERATORS = {"&", "|"}
 
-    def __init__(self, allowed_fields: List[str]) -> None:
+    def __init__(
+        self,
+        allowed_fields: List[str],
+        allowed_lookups: Set[str] | None = None,
+    ) -> None:
         self.allowed_fields = {
             field.strip() for field in allowed_fields if field.strip()
         }
+        self.allowed_lookups = (
+            set(allowed_lookups)
+            if allowed_lookups is not None
+            else set(self.ALLOWED_LOOKUPS)
+        )
         self._dict_handlers = {
             "not": self._handle_not,
             "and": lambda children: self._handle_collection(children),
@@ -75,7 +84,7 @@ class QTreeValidator:
             raise ValueError("Field name cannot be empty.")
 
         lookup = "exact"
-        if len(parts) > 1 and parts[-1] in self.ALLOWED_LOOKUPS:
+        if len(parts) > 1 and parts[-1] in self.allowed_lookups:
             lookup = parts.pop()
 
         if not parts:
@@ -89,7 +98,7 @@ class QTreeValidator:
             raise ValueError(f"Field path '{joined}' is not allowed.")
 
     def _check_lookup(self, lookup: str) -> None:
-        if lookup not in self.ALLOWED_LOOKUPS:
+        if lookup not in self.allowed_lookups:
             raise ValueError(f"Lookup '{lookup}' is not permitted.")
 
     def _handle_not(self, child: FilterNode) -> None:

@@ -48,6 +48,17 @@ const FRONTEND_OPERATOR_LOOKUPS = {
   not_in: "in",
 };
 
+const OPERATOR_ALIASES = {
+  eq: "exact",
+  ne: "exact",
+  starts_with: "startswith",
+  istarts_with: "istartswith",
+  i_starts_with: "istartswith",
+  ends_with: "endswith",
+  iends_with: "iendswith",
+  i_ends_with: "iendswith",
+};
+
 const LOOKUP_LABELS = {
   eq: "Equals",
   ne: "Not Equals",
@@ -89,6 +100,7 @@ const OPERATOR_OPTIONS = [
   { value: "__ne", label: dunderOperatorLabel("ne") },
   ...DJANGO_LOOKUPS.map((lookup) => ({ value: `__${lookup}`, label: dunderOperatorLabel(lookup) })),
 ];
+const AVAILABLE_OPERATOR_OPTIONS = [...OPERATOR_OPTIONS];
 
 function resolveOperatorSpec(rawOperator) {
   const operatorValue = typeof rawOperator === "string" ? rawOperator.trim() : "";
@@ -100,12 +112,19 @@ function resolveOperatorSpec(rawOperator) {
     ? operatorValue.slice(2)
     : operatorValue;
 
-  if (withoutDunder === "eq") {
-    return { lookup: "exact", negated: false };
+  if (withoutDunder.startsWith("not_")) {
+    const lookup = withoutDunder.slice(4);
+    const resolvedLookup = OPERATOR_ALIASES[lookup] || lookup;
+    if (DJANGO_LOOKUP_SET.has(resolvedLookup)) {
+      return { lookup: resolvedLookup, negated: true };
+    }
   }
 
-  if (withoutDunder === "ne") {
-    return { lookup: "exact", negated: true };
+  if (Object.prototype.hasOwnProperty.call(OPERATOR_ALIASES, withoutDunder)) {
+    return {
+      lookup: OPERATOR_ALIASES[withoutDunder],
+      negated: withoutDunder === "ne",
+    };
   }
 
   if (Object.prototype.hasOwnProperty.call(FRONTEND_OPERATOR_LOOKUPS, withoutDunder)) {
@@ -113,13 +132,6 @@ function resolveOperatorSpec(rawOperator) {
       lookup: FRONTEND_OPERATOR_LOOKUPS[withoutDunder],
       negated: withoutDunder.startsWith("not_"),
     };
-  }
-
-  if (withoutDunder.startsWith("not_")) {
-    const lookup = withoutDunder.slice(4);
-    if (DJANGO_LOOKUP_SET.has(lookup)) {
-      return { lookup, negated: true };
-    }
   }
 
   if (DJANGO_LOOKUP_SET.has(withoutDunder)) {
@@ -436,7 +448,7 @@ function createCondition() {
     id: `condition-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     field: AVAILABLE_FIELDS[0] || "",
     fieldRef: null,
-    operator: "equals",
+    operator: AVAILABLE_OPERATOR_OPTIONS[0]?.value || "equals",
     value: "",
     negated: false,
     transforms: [],
@@ -810,12 +822,15 @@ function renderCondition(parentGroup, index) {
   row.appendChild(fieldSelect);
 
   const operatorSelect = document.createElement("select");
-  OPERATOR_OPTIONS.forEach((operator) => {
+  AVAILABLE_OPERATOR_OPTIONS.forEach((operator) => {
     const option = document.createElement("option");
     option.value = operator.value;
     option.textContent = operator.label;
     operatorSelect.appendChild(option);
   });
+  if (!AVAILABLE_OPERATOR_OPTIONS.some((option) => option.value === condition.operator)) {
+    condition.operator = AVAILABLE_OPERATOR_OPTIONS[0]?.value || "equals";
+  }
   operatorSelect.value = condition.operator;
   operatorSelect.addEventListener("change", (event) => {
     condition.operator = event.target.value;
@@ -1169,7 +1184,9 @@ function generateQueryString(group, indent = 0, isRoot = false) {
     }
     const operatorSpec = resolveOperatorSpec(condition.operator);
     const operatorLabel =
-      OPERATOR_OPTIONS.find((option) => option.value === condition.operator)?.label || condition.operator;
+      AVAILABLE_OPERATOR_OPTIONS.find((option) => option.value === condition.operator)?.label ||
+      OPERATOR_OPTIONS.find((option) => option.value === condition.operator)?.label ||
+      condition.operator;
     const transforms = normalizeConditionTransforms(condition);
     const transformMetas = transforms
       .map((transform) => derived.transformsById.get(transform.id))
@@ -1450,6 +1467,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     AVAILABLE_FIELDS,
     OPERATOR_OPTIONS,
+    AVAILABLE_OPERATOR_OPTIONS,
     TRANSFORM_DEFINITIONS,
     TRANSFORM_MAP,
     TRANSFORM_OPTIONS,

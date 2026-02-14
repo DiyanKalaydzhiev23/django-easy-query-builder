@@ -3,6 +3,7 @@ from django.contrib import admin
 from django.test import RequestFactory
 
 from django_easy_query_builder.mixins import QueryBuilderAdminMixin
+from django_easy_query_builder.parsers import DJANGO_OPERATOR_SEQUENCE
 from examples.models import Person
 
 
@@ -49,5 +50,32 @@ def test_get_query_builder_frontend_config(admin_instance):
 
     assert config["queryParam"] == "advanced_query"
     assert "first_name" in config["availableFields"]
+    assert config["availableLookups"] == list(DJANGO_OPERATOR_SEQUENCE)
     assert config["initialQuery"].startswith("{")
     assert config["enableTransforms"] is False
+
+
+def test_admin_lookup_configuration_override_is_exposed_to_frontend():
+    class TestAdmin(QueryBuilderAdminMixin, admin.ModelAdmin):
+        model = Person
+        query_builder_fields = ["email"]
+        advanced_search_lookups = ["__icontains", "exact"]
+
+    admin_instance = TestAdmin(Person, admin.site)
+    request = RequestFactory().get("/admin/examples/person/")
+    config = admin_instance.get_query_builder_frontend_config(request)
+
+    assert config["availableLookups"] == ["exact", "icontains"]
+
+
+def test_admin_lookup_configuration_supports_all_keyword():
+    class TestAdmin(QueryBuilderAdminMixin, admin.ModelAdmin):
+        model = Person
+        query_builder_fields = ["email"]
+        advanced_search_lookups = ["__all__"]
+
+    admin_instance = TestAdmin(Person, admin.site)
+    request = RequestFactory().get("/admin/examples/person/")
+    config = admin_instance.get_query_builder_frontend_config(request)
+
+    assert config["availableLookups"] == list(DJANGO_OPERATOR_SEQUENCE)

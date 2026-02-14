@@ -12,6 +12,8 @@ from django.template.response import TemplateResponse
 
 from django_easy_query_builder.builders import QueryBuilder
 from django_easy_query_builder.parsers import (
+    ALLOWED_DJANGO_OPERATORS,
+    DJANGO_OPERATOR_SEQUENCE,
     FilterNode,
     QueryParser,
     StructuredQueryParser,
@@ -26,6 +28,7 @@ _ALIAS_SEGMENT_RE = re.compile(r"[^A-Za-z0-9]+")
 class QueryBuilderAdminMixin:
     query_builder_fields: List[str] = []
     advanced_search_fields: List[str] = []
+    advanced_search_lookups: List[str] = ["__all__"]
     advanced_query_param: str = "advanced_query"
     change_list_template: str = "admin/django_easy_query_builder/change_list.html"
     _TRANSFORM_ANNOTATIONS = {
@@ -53,6 +56,50 @@ class QueryBuilderAdminMixin:
         if self.advanced_search_fields:
             return list(self.advanced_search_fields)
         return list(self.query_builder_fields)
+
+    def get_allowed_query_lookups(self) -> List[str]:
+        configured = self.advanced_search_lookups
+        if isinstance(configured, str):
+            raw_lookups: List[str] = [configured]
+        else:
+            raw_lookups = list(configured)
+
+        include_all = False
+        selected: Set[str] = set()
+        for raw_lookup in raw_lookups:
+            if not isinstance(raw_lookup, str):
+                raise ValueError("advanced_search_lookups must contain string values.")
+
+            lookup = raw_lookup.strip()
+            if not lookup:
+                continue
+
+            if lookup == "__all__":
+                include_all = True
+                break
+
+            if lookup.startswith("__"):
+                lookup = lookup[2:]
+
+            if lookup in {"eq", "ne"}:
+                lookup = "exact"
+
+            if lookup not in ALLOWED_DJANGO_OPERATORS:
+                raise ValueError(
+                    f"Unsupported lookup '{raw_lookup}' in advanced_search_lookups."
+                )
+
+            selected.add(lookup)
+
+        if include_all:
+            return list(DJANGO_OPERATOR_SEQUENCE)
+
+        if not selected:
+            raise ValueError(
+                "advanced_search_lookups must contain at least one lookup or '__all__'."
+            )
+
+        return [lookup for lookup in DJANGO_OPERATOR_SEQUENCE if lookup in selected]
 
     def get_query_builder_fields_mapping(
         self: QueryBuilderModelAdminMixinProtocol,
@@ -91,10 +138,12 @@ class QueryBuilderAdminMixin:
             return queryset
 
         try:
+            allowed_lookups = self.get_allowed_query_lookups()
             structured_payload = self._decode_structured_query(raw_query)
             filter_tree = self._parse_advanced_query(
                 raw_query,
                 structured_payload=structured_payload,
+                allowed_lookups=allowed_lookups,
             )
             transform_annotations, transform_filter_aliases = (
                 self._build_transform_annotations(structured_payload)
@@ -103,7 +152,10 @@ class QueryBuilderAdminMixin:
             allowed_fields = (
                 list(self.get_allowed_query_fields()) + transform_filter_aliases
             )
-            validator = QTreeValidator(sorted(set(allowed_fields)))
+            validator = QTreeValidator(
+                sorted(set(allowed_fields)),
+                allowed_lookups=set(allowed_lookups),
+            )
             validator.validate(filter_tree)
 
             for alias, annotation in transform_annotations:
@@ -148,6 +200,7 @@ class QueryBuilderAdminMixin:
             "availableFields": [
                 item["name"] for item in self.get_query_builder_fields_mapping()
             ],
+            "availableLookups": self.get_allowed_query_lookups(),
             "queryParam": self.advanced_query_param,
             "initialQuery": request.GET.get(self.advanced_query_param, ""),
             "enableTransforms": False,
@@ -167,6 +220,7 @@ class QueryBuilderAdminMixin:
         self,
         raw_query: str,
         structured_payload: Optional[Dict[str, Any]] = None,
+        allowed_lookups: Optional[List[str]] = None,
     ) -> FilterNode:
         stripped = raw_query.strip()
 
@@ -174,12 +228,18 @@ class QueryBuilderAdminMixin:
             return StructuredQueryParser(
                 structured_payload,
                 field_types=self.get_allowed_query_field_types(),
+                allowed_django_operators=(
+                    set(allowed_lookups) if allowed_lookups is not None else None
+                ),
             ).parse()
 
         if stripped.startswith("{"):
             return StructuredQueryParser(
                 stripped,
                 field_types=self.get_allowed_query_field_types(),
+                allowed_django_operators=(
+                    set(allowed_lookups) if allowed_lookups is not None else None
+                ),
             ).parse()
 
         return QueryParser(stripped).parse()

@@ -14,6 +14,34 @@ from django_easy_query_builder.parsers import StructuredQueryParser
 from django_easy_query_builder.validators import QTreeValidator
 from examples.models import Car, Country, Manufacturer, Person
 
+LOOKUP_FILTER_CASES = [
+    ("exact", "first_name", "__exact", "Maria", {"maria"}),
+    ("iexact", "first_name", "__iexact", "maria", {"maria"}),
+    ("eq_alias", "first_name", "__eq", "Maria", {"maria"}),
+    ("ne_alias", "first_name", "__ne", "Maria", {"marco", "anna"}),
+    ("starts_with_alias", "first_name", "starts_with", "Mar", {"maria", "marco"}),
+    (
+        "dunder_starts_with_alias",
+        "first_name",
+        "__starts_with",
+        "Mar",
+        {"maria", "marco"},
+    ),
+    ("contains", "email", "__contains", "example", {"maria"}),
+    ("icontains", "email", "__icontains", "EXAMPLE", {"maria"}),
+    ("gt", "age", "__gt", "30", {"marco"}),
+    ("gte", "age", "__gte", "30", {"maria", "marco"}),
+    ("lt", "age", "__lt", "30", {"anna"}),
+    ("lte", "age", "__lte", "30", {"maria", "anna"}),
+    ("startswith", "first_name", "__startswith", "Maria", {"maria"}),
+    ("istartswith", "first_name", "__istartswith", "mari", {"maria"}),
+    ("endswith", "last_name", "__endswith", "son", {"marco"}),
+    ("iendswith", "last_name", "__iendswith", "SON", {"marco"}),
+    ("date", "date_of_birth", "__date", "1995-01-15", {"maria"}),
+    ("year", "date_of_birth", "__year", "1995", {"maria", "anna"}),
+    ("month", "date_of_birth", "__month", "1", {"maria", "marco"}),
+]
+
 
 @pytest.mark.django_db
 def test_structured_query_parser_and_builder_filters_people() -> None:
@@ -295,3 +323,103 @@ def test_admin_mixin_rejects_invalid_payload() -> None:
 
     with pytest.raises(SuspiciousOperation):
         admin_instance.get_queryset(request)
+
+
+@pytest.mark.django_db
+def test_admin_mixin_rejects_disallowed_lookup_from_admin_configuration() -> None:
+    class PersonAdmin(QueryBuilderAdminMixin, admin.ModelAdmin):
+        model = Person
+        advanced_search_fields = ["email"]
+        advanced_search_lookups = ["exact"]
+
+    admin_instance = PersonAdmin(Person, admin.site)
+
+    payload = {
+        "logicalOperator": "AND",
+        "conditions": [
+            {"field": "email", "operator": "__icontains", "value": "example.com"}
+        ],
+        "groups": [],
+        "negated": False,
+    }
+    request = RequestFactory().get(
+        "/admin/examples/person/", {"advanced_query": json.dumps(payload)}
+    )
+
+    with pytest.raises(SuspiciousOperation):
+        admin_instance.get_queryset(request)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("_case", "field", "operator", "value", "expected_labels"),
+    LOOKUP_FILTER_CASES,
+)
+def test_admin_mixin_supports_lookup_matrix_except_in_isnull_range(
+    _case: str,
+    field: str,
+    operator: str,
+    value: str,
+    expected_labels: set[str],
+) -> None:
+    class PersonAdmin(QueryBuilderAdminMixin, admin.ModelAdmin):
+        model = Person
+        advanced_search_fields = [
+            "first_name",
+            "last_name",
+            "email",
+            "age",
+            "date_of_birth",
+        ]
+        advanced_search_lookups = ["__all__"]
+
+    admin_instance = PersonAdmin(Person, admin.site)
+
+    maria = baker.make(
+        Person,
+        first_name="Maria",
+        last_name="Petrova",
+        age=30,
+        email="maria@example.com",
+        date_of_birth=date(1995, 1, 15),
+    )
+    marco = baker.make(
+        Person,
+        first_name="Marco",
+        last_name="Johnson",
+        age=35,
+        email="marco@demo.org",
+        date_of_birth=date(1991, 1, 20),
+    )
+    anna = baker.make(
+        Person,
+        first_name="Anna",
+        last_name="Ivanova",
+        age=25,
+        email="anna@another.net",
+        date_of_birth=date(1995, 5, 10),
+    )
+
+    people_by_label = {
+        "maria": maria.id,
+        "marco": marco.id,
+        "anna": anna.id,
+    }
+    expected_ids = {people_by_label[label] for label in expected_labels}
+
+    payload = {
+        "logicalOperator": "AND",
+        "conditions": [
+            {"field": field, "operator": operator, "value": value},
+        ],
+        "groups": [],
+        "negated": False,
+    }
+
+    request = RequestFactory().get(
+        "/admin/examples/person/",
+        {"advanced_query": json.dumps(payload)},
+    )
+
+    result_ids = set(admin_instance.get_queryset(request).values_list("id", flat=True))
+    assert result_ids == expected_ids
