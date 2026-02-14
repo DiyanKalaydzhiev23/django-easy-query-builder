@@ -151,6 +151,28 @@ def test_structured_query_parser_rejects_invalid_group_operator_boundaries() -> 
         StructuredQueryParser(json.dumps(payload)).parse()
 
 
+def test_structured_query_parser_supports_dunder_lookup_operators() -> None:
+    payload = {
+        "logicalOperator": "AND",
+        "conditions": [
+            {"field": "email", "operator": "__icontains", "value": "example.com"},
+            {"field": "first_name", "operator": "__eq", "value": "Ivan"},
+            {"field": "last_name", "operator": "__ne", "value": "Petrov"},
+        ],
+        "groups": [],
+        "negated": False,
+    }
+
+    tree = StructuredQueryParser(json.dumps(payload)).parse()
+    assert tree == [
+        {"email__icontains": "example.com"},
+        {"op": "&"},
+        {"first_name": "Ivan"},
+        {"op": "&"},
+        {"not": {"last_name": "Petrov"}},
+    ]
+
+
 @pytest.mark.django_db
 def test_structured_query_subquery_exists_filters_related_records() -> None:
     germany = baker.make(Country, name="Germany")

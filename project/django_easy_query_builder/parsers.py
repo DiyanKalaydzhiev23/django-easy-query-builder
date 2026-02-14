@@ -37,6 +37,11 @@ FRONTEND_OPERATOR_LOOKUPS = {
 }
 
 NEGATED_FRONTEND_OPERATORS = {"not_equals", "not_contains", "not_in"}
+OPERATOR_ALIASES = {
+    "eq": "exact",
+    "ne": "exact",
+}
+NEGATED_OPERATOR_ALIASES = {"ne"}
 
 _SUPPORTED_TRANSFORMS = {"count", "sum", "avg", "min", "max"}
 
@@ -353,19 +358,37 @@ class StructuredQueryParser:
         return node
 
     def _resolve_operator(self, operator: str, field_path: str) -> tuple[str, bool]:
-        if operator in {"equals", "not_equals"} and self._is_textual_field(field_path):
-            return "iexact", operator in NEGATED_FRONTEND_OPERATORS
+        normalized_operator = operator.strip()
+        if normalized_operator.startswith("__"):
+            normalized_operator = normalized_operator[2:]
 
-        if operator in FRONTEND_OPERATOR_LOOKUPS:
+        if normalized_operator in OPERATOR_ALIASES:
             return (
-                FRONTEND_OPERATOR_LOOKUPS[operator],
-                operator in NEGATED_FRONTEND_OPERATORS,
+                OPERATOR_ALIASES[normalized_operator],
+                normalized_operator in NEGATED_OPERATOR_ALIASES,
             )
 
-        if operator in ALLOWED_DJANGO_OPERATORS:
-            return operator, False
+        if normalized_operator in {"equals", "not_equals"} and self._is_textual_field(
+            field_path
+        ):
+            return "iexact", normalized_operator in NEGATED_FRONTEND_OPERATORS
 
-        raise SyntaxError(f"Unsupported operator '{operator}'.")
+        if normalized_operator in FRONTEND_OPERATOR_LOOKUPS:
+            return (
+                FRONTEND_OPERATOR_LOOKUPS[normalized_operator],
+                normalized_operator in NEGATED_FRONTEND_OPERATORS,
+            )
+
+        if (
+            normalized_operator.startswith("not_")
+            and normalized_operator[4:] in ALLOWED_DJANGO_OPERATORS
+        ):
+            return normalized_operator[4:], True
+
+        if normalized_operator in ALLOWED_DJANGO_OPERATORS:
+            return normalized_operator, False
+
+        raise SyntaxError(f"Unsupported operator '{normalized_operator}'.")
 
     def _is_textual_field(self, field_path: str) -> bool:
         field_type = self.field_types.get(field_path)

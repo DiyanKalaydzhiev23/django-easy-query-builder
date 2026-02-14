@@ -46,6 +46,68 @@ const INITIAL_QUERY_PAYLOAD = typeof BUILDER_CONFIG?.initialQuery === "string"
   ? BUILDER_CONFIG.initialQuery
   : "";
 
+const DJANGO_LOOKUPS = [
+  "exact",
+  "iexact",
+  "contains",
+  "icontains",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "in",
+  "isnull",
+  "startswith",
+  "istartswith",
+  "endswith",
+  "iendswith",
+  "range",
+  "date",
+  "year",
+  "month",
+];
+
+const DJANGO_LOOKUP_SET = new Set(DJANGO_LOOKUPS);
+
+const FRONTEND_OPERATOR_LOOKUPS = {
+  equals: "exact",
+  not_equals: "exact",
+  contains: "contains",
+  not_contains: "contains",
+  greater_than: "gt",
+  less_than: "lt",
+  in: "in",
+  not_in: "in",
+};
+
+const LOOKUP_LABELS = {
+  eq: "Equals",
+  ne: "Not Equals",
+  exact: "Exact Match",
+  iexact: "Exact Match (Case-Insensitive)",
+  contains: "Contains",
+  icontains: "Contains (Case-Insensitive)",
+  gt: "Greater Than",
+  gte: "Greater Than or Equal",
+  lt: "Less Than",
+  lte: "Less Than or Equal",
+  in: "In List",
+  isnull: "Is Null",
+  startswith: "Starts With",
+  istartswith: "Starts With (Case-Insensitive)",
+  endswith: "Ends With",
+  iendswith: "Ends With (Case-Insensitive)",
+  range: "In Range",
+  date: "Date",
+  year: "Year",
+  month: "Month",
+};
+
+function dunderOperatorLabel(lookup) {
+  const human = LOOKUP_LABELS[lookup] || lookup;
+  return human;
+}
+
 const OPERATOR_OPTIONS = [
   { value: "equals", label: "Equals" },
   { value: "not_equals", label: "Not Equals" },
@@ -55,7 +117,49 @@ const OPERATOR_OPTIONS = [
   { value: "less_than", label: "Less Than" },
   { value: "in", label: "In" },
   { value: "not_in", label: "Not In" },
+  { value: "__eq", label: dunderOperatorLabel("eq") },
+  { value: "__ne", label: dunderOperatorLabel("ne") },
+  ...DJANGO_LOOKUPS.map((lookup) => ({ value: `__${lookup}`, label: dunderOperatorLabel(lookup) })),
 ];
+
+function resolveOperatorSpec(rawOperator) {
+  const operatorValue = typeof rawOperator === "string" ? rawOperator.trim() : "";
+  if (!operatorValue) {
+    return { lookup: "exact", negated: false };
+  }
+
+  const withoutDunder = operatorValue.startsWith("__")
+    ? operatorValue.slice(2)
+    : operatorValue;
+
+  if (withoutDunder === "eq") {
+    return { lookup: "exact", negated: false };
+  }
+
+  if (withoutDunder === "ne") {
+    return { lookup: "exact", negated: true };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(FRONTEND_OPERATOR_LOOKUPS, withoutDunder)) {
+    return {
+      lookup: FRONTEND_OPERATOR_LOOKUPS[withoutDunder],
+      negated: withoutDunder.startsWith("not_"),
+    };
+  }
+
+  if (withoutDunder.startsWith("not_")) {
+    const lookup = withoutDunder.slice(4);
+    if (DJANGO_LOOKUP_SET.has(lookup)) {
+      return { lookup, negated: true };
+    }
+  }
+
+  if (DJANGO_LOOKUP_SET.has(withoutDunder)) {
+    return { lookup: withoutDunder, negated: false };
+  }
+
+  return { lookup: "exact", negated: false };
+}
 
 const TRANSFORM_DEFINITIONS = [
   { value: "count", label: "COUNT", djangoName: "Count" },
@@ -1356,6 +1460,7 @@ function generateQueryString(group, indent = 0, isRoot = false) {
     if (condition.isVariableOnly) {
       return;
     }
+    const operatorSpec = resolveOperatorSpec(condition.operator);
     const operatorLabel =
       OPERATOR_OPTIONS.find((option) => option.value === condition.operator)?.label || condition.operator;
     const transforms = normalizeConditionTransforms(condition);
@@ -1385,7 +1490,7 @@ function generateQueryString(group, indent = 0, isRoot = false) {
     }
 
     const valueLabel =
-      condition.operator === "in" || condition.operator === "not_in"
+      operatorSpec.lookup === "in" || operatorSpec.lookup === "range"
         ? `[${condition.value
             .split(",")
             .map((item) => item.trim())
@@ -1417,17 +1522,6 @@ function generateQueryString(group, indent = 0, isRoot = false) {
 }
 
 function generateDjangoORM(group) {
-  const operatorMap = {
-    equals: "",
-    not_equals: "",
-    contains: "__contains",
-    not_contains: "__contains",
-    greater_than: "__gt",
-    less_than: "__lt",
-    in: "__in",
-    not_in: "__in",
-  };
-
   const annotations = new Map();
   const aggregations = new Map();
   const imports = new Set();
@@ -1464,8 +1558,8 @@ function generateDjangoORM(group) {
     return `[${parts.join(", ")}]`;
   };
 
-  const formatValue = (value, operator) => {
-    if (operator === "in" || operator === "not_in") {
+  const formatValue = (value, lookup) => {
+    if (lookup === "in" || lookup === "range") {
       return formatListValue(value);
     }
     return formatScalarValue(value);
@@ -1490,8 +1584,9 @@ function generateDjangoORM(group) {
     const parts = [];
 
     g.conditions.forEach((condition) => {
-      const suffix = operatorMap[condition.operator] || "";
-      let isNegated = condition.negated || condition.operator.startsWith("not_");
+      const operatorSpec = resolveOperatorSpec(condition.operator);
+      const suffix = operatorSpec.lookup === "exact" ? "" : `__${operatorSpec.lookup}`;
+      let isNegated = condition.negated || operatorSpec.negated;
 
       const transforms = normalizeConditionTransforms(condition);
       const transformMetas = transforms
@@ -1520,12 +1615,7 @@ function generateDjangoORM(group) {
         targetPath = "pk";
       }
 
-      let valueExpression;
-      if (condition.operator === "in" || condition.operator === "not_in") {
-        valueExpression = formatValue(condition.value, condition.operator);
-      } else {
-        valueExpression = formatValue(condition.value, condition.operator);
-      }
+      const valueExpression = formatValue(condition.value, operatorSpec.lookup);
 
       const qObject = `Q(${targetPath}${suffix}=${valueExpression})`;
       const expression = isNegated ? `~(${qObject})` : qObject;
