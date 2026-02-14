@@ -162,3 +162,46 @@ describe("subquery controls", () => {
     expect(builder.queryState.conditions.filter((c) => c.isVariableOnly).length).toBe(2);
   });
 });
+
+describe("multi-value editor behavior", () => {
+  it("supports range values as a two-value list in previews and ORM output", () => {
+    builder.queryState.conditions = [];
+    builder.queryState.groups = [];
+    builder.queryState.logicalOperator = "AND";
+    builder.queryState.negated = false;
+
+    const rangeCondition = builder.createCondition();
+    rangeCondition.field = "profile.age";
+    rangeCondition.operator = "__range";
+    rangeCondition.value = ["18", "65"];
+    builder.queryState.conditions.push(rangeCondition);
+
+    builder.rebuildDerivedTransformState();
+    const readable = builder.generateQueryString(builder.queryState, 0, true);
+    const django = builder.generateDjangoORM(builder.queryState);
+
+    expect(readable).toContain("[18, 65]");
+    expect(django).toContain("profile__age__range=[18, 65]");
+  });
+
+  it("renders custom in-list editor and keeps list values in output", () => {
+    builder.queryState.conditions = [];
+    builder.queryState.groups = [];
+    builder.queryState.logicalOperator = "AND";
+    builder.queryState.negated = false;
+
+    const inCondition = builder.createCondition();
+    inCondition.field = "order.status";
+    inCondition.operator = "__in";
+    inCondition.value = ["pending", "paid"];
+    builder.queryState.conditions.push(inCondition);
+
+    builder.renderApp?.();
+    expect(document.querySelectorAll(".condition-value-item").length).toBe(2);
+
+    const readable = builder.generateQueryString(builder.queryState, 0, true);
+    const django = builder.generateDjangoORM(builder.queryState);
+    expect(readable).toContain("[pending, paid]");
+    expect(django).toContain("order__status__in=['pending', 'paid']");
+  });
+});

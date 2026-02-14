@@ -304,6 +304,63 @@ a:hover {
   flex: 1 1 200px;
 }
 
+.condition-value-group {
+  display: flex;
+  gap: 0.45rem;
+  flex: 1 1 260px;
+  min-width: 220px;
+}
+
+.condition-value-group input[type="text"] {
+  flex: 1 1 120px;
+  min-width: 90px;
+}
+
+.condition-value-group-list {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.condition-value-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.condition-value-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.18rem 0.25rem 0.18rem 0.42rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--background));
+}
+
+.condition-value-chip {
+  font-size: 0.76rem;
+  color: hsl(var(--foreground));
+}
+
+.condition-value-remove {
+  line-height: 1;
+  padding: 0.18rem 0.35rem;
+}
+
+.condition-value-controls {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.condition-value-controls input[type="text"] {
+  flex: 1 1 180px;
+}
+
+.condition-value-empty {
+  font-size: 0.78rem;
+  color: hsl(var(--muted-foreground));
+}
+
 .transform-list {
   display: flex;
   flex-direction: column;

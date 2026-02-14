@@ -7,13 +7,14 @@ from examples.models import Person
 
 @admin.register(Person)
 class PersonAdmin(AdvancedSearchAdminMixin, admin.ModelAdmin):
-    list_display = ["first_name", "last_name", "age", "email", "date_of_birth"]
+    list_display = ["first_name", "last_name", "age", "email", "date_of_birth", "age"]
     advanced_search_fields = [
         "first_name",
         "date_of_birth",
         "email",
         "cars__manufacturer__country__name",
         "cars",
+        "age",
     ]
     # Todo add all option for relations filtering
 

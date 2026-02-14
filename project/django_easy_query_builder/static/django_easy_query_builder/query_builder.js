@@ -209,6 +209,47 @@ function resolveAvailableOperatorOptions(config) {
 
 const AVAILABLE_OPERATOR_OPTIONS = resolveAvailableOperatorOptions(BUILDER_CONFIG);
 
+function normalizeValueItem(item) {
+  if (item === undefined || item === null) {
+    return "";
+  }
+  return String(item).trim();
+}
+
+function toValueList(rawValue, keepEmpty = false) {
+  if (Array.isArray(rawValue)) {
+    const normalized = rawValue.map((item) => normalizeValueItem(item));
+    return keepEmpty ? normalized : normalized.filter((item) => item.length > 0);
+  }
+
+  if (rawValue === undefined || rawValue === null) {
+    return [];
+  }
+
+  const text = String(rawValue);
+  const splitValues = text.split(",").map((item) => item.trim());
+  return keepEmpty ? splitValues : splitValues.filter((item) => item.length > 0);
+}
+
+function setConditionValueList(condition, values) {
+  condition.value = values.map((value) => normalizeValueItem(value));
+}
+
+function getConditionScalarValue(condition) {
+  if (Array.isArray(condition.value)) {
+    return condition.value
+      .map((item) => normalizeValueItem(item))
+      .filter((item) => item.length > 0)
+      .join(", ");
+  }
+  return normalizeValueItem(condition.value);
+}
+
+function getConditionRangeValues(condition) {
+  const values = toValueList(condition.value, true);
+  return [values[0] || "", values[1] || ""];
+}
+
 const TRANSFORM_DEFINITIONS = [
   { value: "count", label: "COUNT", djangoName: "Count" },
   { value: "sum", label: "SUM", djangoName: "Sum" },
@@ -602,9 +643,9 @@ function hydrateCondition(condition) {
     normalized.operator = AVAILABLE_OPERATOR_OPTIONS[0]?.value || "equals";
   }
   if (Array.isArray(condition.value)) {
-    normalized.value = condition.value.join(", ");
+    normalized.value = condition.value.map((item) => normalizeValueItem(item));
   } else if (condition.value !== undefined && condition.value !== null) {
-    normalized.value = String(condition.value);
+    normalized.value = normalizeValueItem(condition.value);
   } else {
     normalized.value = "";
   }
@@ -1166,19 +1207,116 @@ function renderCondition(parentGroup, index) {
   operatorSelect.value = condition.operator;
   operatorSelect.addEventListener("change", (event) => {
     condition.operator = event.target.value;
-    updatePreview();
+    renderApp();
   });
   row.appendChild(operatorSelect);
 
-  const valueInput = document.createElement("input");
-  valueInput.type = "text";
-  valueInput.placeholder = "Value";
-  valueInput.value = condition.value;
-  valueInput.addEventListener("input", (event) => {
-    condition.value = event.target.value;
-    updatePreview();
-  });
-  row.appendChild(valueInput);
+  const operatorSpec = resolveOperatorSpec(condition.operator);
+  if (operatorSpec.lookup === "range") {
+    const values = getConditionRangeValues(condition);
+    const valueGroup = document.createElement("div");
+    valueGroup.className = "condition-value-group";
+
+    const startInput = document.createElement("input");
+    startInput.type = "text";
+    startInput.placeholder = "From";
+    startInput.value = values[0];
+
+    const endInput = document.createElement("input");
+    endInput.type = "text";
+    endInput.placeholder = "To";
+    endInput.value = values[1];
+
+    const syncRangeValues = () => {
+      setConditionValueList(condition, [startInput.value, endInput.value]);
+      updatePreview();
+    };
+
+    startInput.addEventListener("input", syncRangeValues);
+    endInput.addEventListener("input", syncRangeValues);
+    valueGroup.appendChild(startInput);
+    valueGroup.appendChild(endInput);
+    row.appendChild(valueGroup);
+  } else if (operatorSpec.lookup === "in") {
+    const valueGroup = document.createElement("div");
+    valueGroup.className = "condition-value-group condition-value-group-list";
+
+    const valueList = document.createElement("div");
+    valueList.className = "condition-value-list";
+    const values = toValueList(condition.value);
+    setConditionValueList(condition, values);
+    if (values.length === 0) {
+      const empty = document.createElement("span");
+      empty.className = "condition-value-empty";
+      empty.textContent = "No values yet";
+      valueList.appendChild(empty);
+    } else {
+      values.forEach((value, valueIndex) => {
+        const item = document.createElement("span");
+        item.className = "condition-value-item";
+
+        const label = document.createElement("span");
+        label.className = "condition-value-chip";
+        label.textContent = value;
+        item.appendChild(label);
+
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "btn btn-ghost btn-sm condition-value-remove";
+        removeButton.textContent = "Remove";
+        removeButton.addEventListener("click", () => {
+          const nextValues = toValueList(condition.value);
+          nextValues.splice(valueIndex, 1);
+          setConditionValueList(condition, nextValues);
+          renderApp();
+        });
+        item.appendChild(removeButton);
+        valueList.appendChild(item);
+      });
+    }
+    valueGroup.appendChild(valueList);
+
+    const valueControls = document.createElement("div");
+    valueControls.className = "condition-value-controls";
+    const addInput = document.createElement("input");
+    addInput.type = "text";
+    addInput.placeholder = "Add value";
+    const addButton = document.createElement("button");
+    addButton.type = "button";
+    addButton.className = "btn btn-outline btn-sm";
+    addButton.textContent = "Add";
+
+    const addValue = () => {
+      const nextValue = normalizeValueItem(addInput.value);
+      if (!nextValue) return;
+      const nextValues = toValueList(condition.value);
+      nextValues.push(nextValue);
+      setConditionValueList(condition, nextValues);
+      renderApp();
+    };
+
+    addInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      addValue();
+    });
+    addButton.addEventListener("click", addValue);
+
+    valueControls.appendChild(addInput);
+    valueControls.appendChild(addButton);
+    valueGroup.appendChild(valueControls);
+    row.appendChild(valueGroup);
+  } else {
+    const valueInput = document.createElement("input");
+    valueInput.type = "text";
+    valueInput.placeholder = "Value";
+    valueInput.value = getConditionScalarValue(condition);
+    valueInput.addEventListener("input", (event) => {
+      condition.value = event.target.value;
+      updatePreview();
+    });
+    row.appendChild(valueInput);
+  }
 
   const removeButton = document.createElement("button");
   removeButton.type = "button";
@@ -1547,12 +1685,8 @@ function generateQueryString(group, indent = 0, isRoot = false) {
 
     const valueLabel =
       operatorSpec.lookup === "in" || operatorSpec.lookup === "range"
-        ? `[${condition.value
-            .split(",")
-            .map((item) => item.trim())
-            .filter((item) => item.length > 0)
-            .join(", ")}]`
-        : `"${condition.value}"`;
+        ? `[${toValueList(condition.value).join(", ")}]`
+        : `"${getConditionScalarValue(condition)}"`;
     const prefix = condition.negated ? "NOT " : "";
     const line = `${"  ".repeat(indent + 1)}${prefix}${fieldLabel} ${operatorLabel} ${valueLabel}`;
     items.push(line);
@@ -1588,7 +1722,7 @@ function generateDjangoORM(group) {
   const formatBoolean = (value) => (value.toLowerCase() === "true" ? "True" : "False");
 
   const formatScalarValue = (raw) => {
-    const trimmed = raw.trim();
+    const trimmed = normalizeValueItem(raw);
     if (trimmed.length === 0) {
       return "''";
     }
@@ -1605,11 +1739,7 @@ function generateDjangoORM(group) {
   };
 
   const formatListValue = (raw) => {
-    const parts = raw
-      .split(",")
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0)
-      .map((item) => formatScalarValue(item));
+    const parts = toValueList(raw).map((item) => formatScalarValue(item));
 
     return `[${parts.join(", ")}]`;
   };
@@ -1826,6 +1956,7 @@ if (typeof module !== "undefined" && module.exports) {
     rebuildDerivedTransformState,
     getDerivedTransformState,
     getFieldOptionsForGroup,
+    renderApp,
     queryState,
     makeAlias,
     toDjangoPath,
