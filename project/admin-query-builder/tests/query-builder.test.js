@@ -89,6 +89,69 @@ describe("automatic transform behavior", () => {
     expect(django).not.toContain("result = queryset.aggregate");
   });
 
+  it("renders alias value references as F expressions", () => {
+    const variableCondition = builder.createCondition();
+    variableCondition.field = "profile.age";
+    variableCondition.isVariableOnly = true;
+    variableCondition.transforms = [{ value: "avg" }];
+    builder.normalizeConditionTransforms(variableCondition);
+    builder.queryState.conditions.push(variableCondition);
+
+    builder.rebuildDerivedTransformState();
+    const derived = builder.getDerivedTransformState();
+    const meta = derived.transformsById.get(variableCondition.transforms[0].id);
+
+    const filterCondition = builder.createCondition();
+    filterCondition.field = "profile.age";
+    filterCondition.operator = "greater_than";
+    filterCondition.value = meta.alias;
+    filterCondition.valueRef = { type: "alias", transformId: meta.id };
+    builder.queryState.conditions.push(filterCondition);
+
+    builder.rebuildDerivedTransformState();
+    const django = builder.generateDjangoORM(builder.queryState);
+
+    expect(django).toContain(`.annotate(${meta.alias}=Avg('profile__age'))`);
+    expect(django).toContain(`F('${meta.alias}')`);
+  });
+
+  it("shows eligible variable suggestions for empty and partially typed values", () => {
+    const avgCondition = builder.createCondition();
+    avgCondition.field = "profile.age";
+    avgCondition.isVariableOnly = true;
+    avgCondition.transforms = [{ value: "avg" }];
+    builder.normalizeConditionTransforms(avgCondition);
+
+    const maxCondition = builder.createCondition();
+    maxCondition.field = "profile.age";
+    maxCondition.isVariableOnly = true;
+    maxCondition.transforms = [{ value: "max" }];
+    builder.normalizeConditionTransforms(maxCondition);
+
+    const filterCondition = builder.createCondition();
+    filterCondition.field = "profile.age";
+    filterCondition.operator = "greater_than";
+    filterCondition.value = "";
+
+    builder.queryState.conditions.push(avgCondition, maxCondition, filterCondition);
+    builder.renderApp?.();
+
+    const valueInput = document.querySelector(".condition-row input[placeholder='Value']");
+    expect(valueInput.getAttribute("list")).toBeTruthy();
+
+    let suggestionList = document.getElementById(valueInput.getAttribute("list"));
+    expect(suggestionList).toBeTruthy();
+    expect(suggestionList.options.length).toBe(2);
+
+    valueInput.value = "avg_";
+    valueInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+
+    suggestionList = document.getElementById(valueInput.getAttribute("list"));
+    expect(suggestionList.options.length).toBe(1);
+    expect(Array.from(suggestionList.options).some((option) => option.value.includes("avg_profile_age"))).toBe(true);
+    expect(Array.from(suggestionList.options).some((option) => option.value.includes("max_profile_age"))).toBe(false);
+  });
+
   it("exposes generated aliases to ancestor groups via field options", () => {
     const childGroup = builder.createGroup();
     const childCondition = builder.createCondition();

@@ -2,11 +2,12 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from django.contrib import messages
 from django.contrib.admin.options import csrf_protect_m
 from django.contrib.admin.views.main import ChangeList
 from django.core.exceptions import FieldDoesNotExist, FieldError, SuspiciousOperation
 from django.db import DatabaseError, DataError, models
-from django.db.models import Avg, Count, Max, Min, Sum
+from django.db.models import Avg, Count, Max, Min, Subquery, Sum, Value
 from django.http import HttpRequest
 from django.template.response import TemplateResponse
 
@@ -140,20 +141,36 @@ class QueryBuilderAdminMixin:
         try:
             allowed_lookups = self.get_allowed_query_lookups()
             structured_payload = self._decode_structured_query(raw_query)
+            transform_annotations: List[Tuple[str, models.Expression]] = []
+            transform_filter_aliases: List[str] = []
+            transform_catalog: Optional[Dict[str, Dict[str, str]]] = None
+
+            if structured_payload is not None:
+                transform_catalog, alias_definitions = self._collect_transform_catalog(
+                    structured_payload
+                )
+                self._normalize_payload_value_alias_references(
+                    structured_payload,
+                    transform_catalog,
+                )
+                transform_annotations, transform_filter_aliases = (
+                    self._build_transform_annotations(
+                        structured_payload,
+                        base_queryset=queryset,
+                        transform_by_id=transform_catalog,
+                        alias_definitions=alias_definitions,
+                    )
+                )
+
             filter_tree = self._parse_advanced_query(
                 raw_query,
                 structured_payload=structured_payload,
                 allowed_lookups=allowed_lookups,
             )
-            transform_annotations, transform_filter_aliases = (
-                self._build_transform_annotations(structured_payload)
-            )
 
-            allowed_fields = (
-                list(self.get_allowed_query_fields()) + transform_filter_aliases
-            )
             validator = QTreeValidator(
-                sorted(set(allowed_fields)),
+                sorted(set(self.get_allowed_query_fields())),
+                allowed_aliases=transform_filter_aliases,
                 allowed_lookups=set(allowed_lookups),
             )
             validator.validate(filter_tree)
@@ -172,7 +189,13 @@ class QueryBuilderAdminMixin:
             DatabaseError,
             TypeError,
         ) as exc:
-            raise SuspiciousOperation(f"Invalid advanced query payload: {exc}") from exc
+            message = f"Invalid advanced query payload: {exc}"
+            if getattr(request, "_advanced_query_suppress_errors", False):
+                if not getattr(request, "_advanced_query_error_reported", False):
+                    self.message_user(request, message, level=messages.ERROR)
+                    request._advanced_query_error_reported = True
+                return queryset
+            raise SuspiciousOperation(message) from exc
 
     def get_changelist(
         self, request: HttpRequest, **kwargs: object
@@ -185,6 +208,7 @@ class QueryBuilderAdminMixin:
         request: HttpRequest,
         extra_context: Optional[dict] = None,
     ) -> TemplateResponse:
+        request._advanced_query_suppress_errors = True
         if extra_context is None:
             extra_context = {}
 
@@ -247,25 +271,23 @@ class QueryBuilderAdminMixin:
     def _build_transform_annotations(
         self,
         structured_payload: Optional[Dict[str, Any]],
-    ) -> Tuple[List[Tuple[str, models.Aggregate]], List[str]]:
+        base_queryset: Optional[models.QuerySet[models.Model]] = None,
+        transform_by_id: Optional[Dict[str, Dict[str, str]]] = None,
+        alias_definitions: Optional[Dict[str, Dict[str, str]]] = None,
+    ) -> Tuple[List[Tuple[str, models.Expression]], List[str]]:
         if structured_payload is None:
             return [], []
 
-        transform_by_id: Dict[str, Dict[str, str]] = {}
-        alias_definitions: Dict[str, Dict[str, str]] = {}
-        self._collect_transform_definitions(
-            structured_payload,
-            transform_by_id,
-            alias_definitions,
-        )
+        catalog = transform_by_id
+        alias_catalog = alias_definitions
+        if catalog is None or alias_catalog is None:
+            catalog, alias_catalog = self._collect_transform_catalog(structured_payload)
 
-        if not transform_by_id:
+        if not catalog:
             return [], []
-
-        self._validate_transform_sources(alias_definitions)
         referenced_transform_ids = self._collect_referenced_transform_ids(
             structured_payload,
-            transform_by_id,
+            catalog,
         )
 
         if not referenced_transform_ids:
@@ -273,29 +295,268 @@ class QueryBuilderAdminMixin:
 
         needed_aliases = self._resolve_needed_transform_aliases(
             referenced_transform_ids,
-            transform_by_id,
-            alias_definitions,
+            catalog,
+            alias_catalog,
         )
         ordered_aliases = self._toposort_transform_aliases(
             needed_aliases,
-            alias_definitions,
+            alias_catalog,
         )
 
-        annotations: List[Tuple[str, models.Aggregate]] = []
+        annotations: List[Tuple[str, models.Expression]] = []
         for alias in ordered_aliases:
-            definition = alias_definitions[alias]
-            transform_name = definition["transform"]
-            annotation_factory = self._TRANSFORM_ANNOTATIONS[transform_name]
-            source_value = definition["source_value"]
-            annotations.append((alias, annotation_factory(source_value)))
+            definition = alias_catalog[alias]
+            annotations.append(
+                (
+                    alias,
+                    self._build_transform_annotation_expression(
+                        definition,
+                        base_queryset,
+                    ),
+                )
+            )
 
         filter_aliases = sorted(
             {
-                transform_by_id[transform_id]["alias"]
+                catalog[transform_id]["alias"]
                 for transform_id in referenced_transform_ids
             }
         )
         return annotations, filter_aliases
+
+    def _build_transform_annotation_expression(
+        self,
+        definition: Dict[str, str],
+        base_queryset: Optional[models.QuerySet[models.Model]],
+    ) -> models.Expression:
+        transform_name = definition["transform"]
+        annotation_factory = self._TRANSFORM_ANNOTATIONS[transform_name]
+        source_value = definition["source_value"]
+
+        if self._should_use_scalar_transform_annotation(definition):
+            return self._build_scalar_transform_subquery(
+                base_queryset,
+                annotation_factory,
+                source_value,
+            )
+
+        return annotation_factory(source_value)
+
+    def _should_use_scalar_transform_annotation(
+        self,
+        definition: Dict[str, str],
+    ) -> bool:
+        if definition["source_kind"] != "field":
+            return False
+
+        source_value = definition["source_value"]
+        if "__" in source_value:
+            return False
+
+        resolved_field = self._resolve_field_path(source_value)
+        if resolved_field is None:
+            return False
+
+        return not getattr(resolved_field, "is_relation", False)
+
+    def _build_scalar_transform_subquery(
+        self,
+        base_queryset: Optional[models.QuerySet[models.Model]],
+        annotation_factory: type[models.Aggregate],
+        source_value: str,
+    ) -> models.Subquery:
+        scalar_group_alias = "_dqe_scalar_group"
+        scalar_value_alias = "_dqe_scalar_value"
+        queryset = (
+            base_queryset
+            if base_queryset is not None
+            else self.model._default_manager.all()
+        )
+
+        scalar_queryset = (
+            queryset.order_by()
+            .annotate(**{scalar_group_alias: Value(1)})
+            .values(scalar_group_alias)
+            .annotate(**{scalar_value_alias: annotation_factory(source_value)})
+            .values(scalar_value_alias)[:1]
+        )
+        return Subquery(scalar_queryset)
+
+    def _collect_transform_catalog(
+        self,
+        structured_payload: Dict[str, Any],
+    ) -> Tuple[Dict[str, Dict[str, str]], Dict[str, Dict[str, str]]]:
+        transform_by_id: Dict[str, Dict[str, str]] = {}
+        alias_definitions: Dict[str, Dict[str, str]] = {}
+        self._collect_transform_definitions(
+            structured_payload,
+            transform_by_id,
+            alias_definitions,
+        )
+        if transform_by_id:
+            self._validate_transform_sources(alias_definitions)
+        return transform_by_id, alias_definitions
+
+    def _normalize_payload_value_alias_references(
+        self,
+        root_group: Dict[str, Any],
+        transform_by_id: Dict[str, Dict[str, str]],
+    ) -> None:
+        if not transform_by_id:
+            return
+
+        field_types = self.get_allowed_query_field_types()
+        transforms_per_group: Dict[int, List[Dict[str, str]]] = {}
+        children_by_group: Dict[int, List[int]] = {}
+        parent_by_group: Dict[int, int] = {}
+
+        def collect(group: Dict[str, Any]) -> int:
+            group_key = id(group)
+            direct_transforms: List[Dict[str, str]] = []
+
+            conditions = group.get("conditions", [])
+            if not isinstance(conditions, list):
+                raise SyntaxError("group.conditions must be a list.")
+            for condition in conditions:
+                if not isinstance(condition, dict):
+                    raise SyntaxError("Each condition must be an object.")
+                transforms = condition.get("transforms")
+                if not isinstance(transforms, list):
+                    continue
+                for transform in transforms:
+                    if not isinstance(transform, dict):
+                        continue
+                    transform_id = transform.get("id")
+                    if not isinstance(transform_id, str):
+                        continue
+                    transform_definition = transform_by_id.get(transform_id.strip())
+                    if transform_definition is not None:
+                        direct_transforms.append(transform_definition)
+
+            transforms_per_group[group_key] = direct_transforms
+
+            child_keys: List[int] = []
+            child_groups = group.get("groups", [])
+            if not isinstance(child_groups, list):
+                raise SyntaxError("group.groups must be a list.")
+            for child in child_groups:
+                if not isinstance(child, dict):
+                    raise SyntaxError("Each nested group must be an object.")
+                child_key = collect(child)
+                parent_by_group[child_key] = group_key
+                child_keys.append(child_key)
+
+            children_by_group[group_key] = child_keys
+            return group_key
+
+        root_key = collect(root_group)
+        subtree_transforms: Dict[int, List[Dict[str, str]]] = {}
+
+        def gather_subtree(group_key: int) -> List[Dict[str, str]]:
+            collected = list(transforms_per_group.get(group_key, []))
+            for child_key in children_by_group.get(group_key, []):
+                collected.extend(gather_subtree(child_key))
+            subtree_transforms[group_key] = collected
+            return collected
+
+        gather_subtree(root_key)
+
+        alias_lookup_by_group: Dict[int, Dict[str, Dict[str, str]]] = {}
+        for group_key in subtree_transforms:
+            accessible = list(subtree_transforms.get(group_key, []))
+            current_parent = parent_by_group.get(group_key)
+            while current_parent is not None:
+                accessible.extend(transforms_per_group.get(current_parent, []))
+                current_parent = parent_by_group.get(current_parent)
+            alias_lookup_by_group[group_key] = {
+                definition["alias"]: definition for definition in accessible
+            }
+
+        def normalize_group(group: Dict[str, Any]) -> None:
+            group_key = id(group)
+            alias_lookup = alias_lookup_by_group.get(group_key, {})
+
+            conditions = group.get("conditions", [])
+            if not isinstance(conditions, list):
+                raise SyntaxError("group.conditions must be a list.")
+            for condition in conditions:
+                if not isinstance(condition, dict):
+                    raise SyntaxError("Each condition must be an object.")
+                if bool(condition.get("isVariableOnly", False)):
+                    continue
+
+                raw_value = condition.get("value")
+                if condition.get("valueRef") is not None:
+                    continue
+                if not isinstance(raw_value, str):
+                    continue
+
+                value = raw_value.strip()
+                if not value:
+                    continue
+
+                matched_alias = alias_lookup.get(value)
+                if matched_alias is not None:
+                    condition["value"] = matched_alias["alias"]
+                    condition["valueRef"] = {
+                        "type": "alias",
+                        "transformId": matched_alias["id"],
+                    }
+                    continue
+
+                if not self._should_treat_value_as_variable_candidate(
+                    condition,
+                    field_types,
+                ):
+                    continue
+
+                if "_" in value and _FIELD_SEGMENT_RE.match(value):
+                    raise SyntaxError(f"Unknown variable '{value}'.")
+
+            child_groups = group.get("groups", [])
+            if not isinstance(child_groups, list):
+                raise SyntaxError("group.groups must be a list.")
+            for child in child_groups:
+                if not isinstance(child, dict):
+                    raise SyntaxError("Each nested group must be an object.")
+                normalize_group(child)
+
+        normalize_group(root_group)
+
+    def _should_treat_value_as_variable_candidate(
+        self,
+        condition: Dict[str, Any],
+        field_types: Dict[str, str],
+    ) -> bool:
+        operator = condition.get("operator", "equals")
+        if not isinstance(operator, str):
+            return False
+
+        normalized_operator = operator.strip()
+        if normalized_operator.startswith("__"):
+            normalized_operator = normalized_operator[2:]
+        if normalized_operator.startswith("not_"):
+            normalized_operator = normalized_operator[4:]
+
+        if normalized_operator in {"in", "range", "isnull"}:
+            return False
+
+        if condition.get("fieldRef") is not None:
+            return True
+
+        field = condition.get("field")
+        if not isinstance(field, str) or not field.strip():
+            return False
+
+        field_path = self._to_django_path(field)
+        field_type = field_types.get(field_path)
+        return field_type not in {
+            "CharField",
+            "TextField",
+            "EmailField",
+            "SlugField",
+            "URLField",
+        }
 
     def _collect_transform_definitions(
         self,
@@ -461,38 +722,41 @@ class QueryBuilderAdminMixin:
             if bool(condition.get("isVariableOnly", False)):
                 continue
 
-            field_ref = condition.get("fieldRef")
-            if field_ref is None:
-                continue
-            if not isinstance(field_ref, dict):
-                raise SyntaxError("condition.fieldRef must be an object when provided.")
-            if field_ref.get("type") != "alias":
-                raise SyntaxError(
-                    "condition.fieldRef.type must be 'alias' when provided."
-                )
+            field_transform_id = self._resolve_condition_transform_reference(
+                condition,
+                "fieldRef",
+                transform_by_id,
+            )
+            if field_transform_id is not None:
+                transform_definition = transform_by_id[field_transform_id]
+                field = condition.get("field")
+                if not isinstance(field, str) or not field.strip():
+                    raise SyntaxError(
+                        "Alias filter conditions require a non-empty 'field'."
+                    )
+                if field.strip() != transform_definition["alias"]:
+                    raise SyntaxError(
+                        "condition.field must match the referenced transform alias."
+                    )
+                referenced.add(field_transform_id)
 
-            transform_id = field_ref.get("transformId")
-            if not isinstance(transform_id, str) or not transform_id.strip():
-                raise SyntaxError(
-                    "condition.fieldRef.transformId must be a non-empty string."
-                )
-            transform_id = transform_id.strip()
-
-            transform_definition = transform_by_id.get(transform_id)
-            if transform_definition is None:
-                raise SyntaxError(f"Unknown transform reference '{transform_id}'.")
-
-            field = condition.get("field")
-            if not isinstance(field, str) or not field.strip():
-                raise SyntaxError(
-                    "Alias filter conditions require a non-empty 'field'."
-                )
-            if field.strip() != transform_definition["alias"]:
-                raise SyntaxError(
-                    "condition.field must match the referenced transform alias."
-                )
-
-            referenced.add(transform_id)
+            value_transform_id = self._resolve_condition_transform_reference(
+                condition,
+                "valueRef",
+                transform_by_id,
+            )
+            if value_transform_id is not None:
+                transform_definition = transform_by_id[value_transform_id]
+                value = condition.get("value")
+                if not isinstance(value, str) or not value.strip():
+                    raise SyntaxError(
+                        "Variable comparison conditions require a non-empty 'value'."
+                    )
+                if value.strip() != transform_definition["alias"]:
+                    raise SyntaxError(
+                        "condition.value must match the referenced transform alias."
+                    )
+                referenced.add(value_transform_id)
 
         child_groups = group.get("groups", [])
         if not isinstance(child_groups, list):
@@ -505,6 +769,34 @@ class QueryBuilderAdminMixin:
             )
 
         return referenced
+
+    def _resolve_condition_transform_reference(
+        self,
+        condition: Dict[str, Any],
+        key: str,
+        transform_by_id: Dict[str, Dict[str, str]],
+    ) -> Optional[str]:
+        ref = condition.get(key)
+        if ref is None:
+            return None
+        if not isinstance(ref, dict):
+            raise SyntaxError(f"condition.{key} must be an object when provided.")
+        if ref.get("type") != "alias":
+            raise SyntaxError(f"condition.{key}.type must be 'alias' when provided.")
+
+        transform_id = ref.get("transformId")
+        if not isinstance(transform_id, str) or not transform_id.strip():
+            raise SyntaxError(
+                f"condition.{key}.transformId must be a non-empty string."
+            )
+
+        normalized_transform_id = transform_id.strip()
+        if normalized_transform_id not in transform_by_id:
+            raise SyntaxError(
+                f"Unknown transform reference '{normalized_transform_id}'."
+            )
+
+        return normalized_transform_id
 
     def _resolve_needed_transform_aliases(
         self,

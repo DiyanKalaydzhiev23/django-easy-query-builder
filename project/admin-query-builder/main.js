@@ -394,14 +394,25 @@ function buildDerivedTransformState(rootGroup) {
     }
   };
 
+  const resolveAccessibleAliasMeta = (groupId, transformId) => {
+    if (!transformId) return null;
+    const candidate = transformsById.get(transformId);
+    if (!candidate) return null;
+    const lookup = aliasLookupByGroupId.get(groupId);
+    if (!lookup) return null;
+    const accessible = lookup.get(candidate.alias);
+    if (!accessible || accessible.id !== candidate.id) {
+      return null;
+    }
+    return accessible;
+  };
+
   const synchronizeGroup = (group) => {
     group.conditions.forEach((condition) => {
       let refMeta = null;
       if (condition.fieldRef?.type === "alias" && condition.fieldRef.transformId) {
-        const candidate = transformsById.get(condition.fieldRef.transformId);
-        if (candidate && (candidate.groupId === group.id || candidate.ancestorGroupIds.includes(group.id))) {
-          refMeta = candidate;
-        } else {
+        refMeta = resolveAccessibleAliasMeta(group.id, condition.fieldRef.transformId);
+        if (!refMeta) {
           delete condition.fieldRef;
         }
       }
@@ -420,6 +431,21 @@ function buildDerivedTransformState(rootGroup) {
       } else {
         delete condition.fieldRef;
         ensureFieldValue(condition);
+      }
+
+      if (condition.valueRef?.type === "alias" && condition.valueRef.transformId) {
+        const valueRefMeta = resolveAccessibleAliasMeta(
+          group.id,
+          condition.valueRef.transformId
+        );
+        if (valueRefMeta) {
+          condition.value = valueRefMeta.alias;
+          referencedTransformIds.add(valueRefMeta.id);
+        } else {
+          delete condition.valueRef;
+        }
+      } else {
+        delete condition.valueRef;
       }
     });
 
@@ -474,6 +500,33 @@ function getAliasMetaForCondition(condition) {
   return derived.transformsById.get(condition.fieldRef.transformId) || null;
 }
 
+function getAliasMetaForValue(condition) {
+  if (!condition?.valueRef || condition.valueRef.type !== "alias") {
+    return null;
+  }
+  const derived = getDerivedTransformState();
+  return derived.transformsById.get(condition.valueRef.transformId) || null;
+}
+
+function getEligibleAliasValueOptions(fieldOptions, typedValue) {
+  const aliasOptions = fieldOptions.filter((option) => option.type === "alias");
+  if (aliasOptions.length === 0) {
+    return [];
+  }
+
+  const normalizedTyped = normalizeValueItem(typedValue).toLowerCase();
+  if (!normalizedTyped) {
+    return aliasOptions;
+  }
+
+  const matches = aliasOptions.filter((option) => (
+    option.value.toLowerCase().includes(normalizedTyped)
+    || option.label.toLowerCase().includes(normalizedTyped)
+  ));
+
+  return matches.length > 0 ? matches : aliasOptions;
+}
+
 function createGroup() {
   return {
     id: `group-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -491,6 +544,7 @@ function createCondition() {
     fieldRef: null,
     operator: AVAILABLE_OPERATOR_OPTIONS[0]?.value || "equals",
     value: "",
+    valueRef: null,
     negated: false,
     transforms: [],
   };
@@ -892,6 +946,7 @@ function renderCondition(parentGroup, index) {
 
   const operatorSpec = resolveOperatorSpec(condition.operator);
   if (operatorSpec.lookup === "range") {
+    delete condition.valueRef;
     const values = getConditionRangeValues(condition);
     const valueGroup = document.createElement("div");
     valueGroup.className = "condition-value-group";
@@ -917,6 +972,7 @@ function renderCondition(parentGroup, index) {
     valueGroup.appendChild(endInput);
     row.appendChild(valueGroup);
   } else if (operatorSpec.lookup === "in") {
+    delete condition.valueRef;
     const valueGroup = document.createElement("div");
     valueGroup.className = "condition-value-group condition-value-group-list";
 
@@ -988,15 +1044,71 @@ function renderCondition(parentGroup, index) {
     valueGroup.appendChild(valueControls);
     row.appendChild(valueGroup);
   } else {
+    const currentScalarValue = getConditionScalarValue(condition);
+    const aliasValueOptions = fieldOptions.filter((option) => option.type === "alias");
+    const supportsAliasValueRef = (
+      operatorSpec.lookup !== "isnull" && aliasValueOptions.length > 0
+    );
+    let suggestionList = null;
+
+    const syncSuggestionOptions = (typedValue) => {
+      if (!suggestionList) {
+        return;
+      }
+
+      const eligibleAliasValueOptions = getEligibleAliasValueOptions(
+        fieldOptions,
+        typedValue
+      );
+      suggestionList.innerHTML = "";
+
+      eligibleAliasValueOptions.forEach((optionDef) => {
+        const option = document.createElement("option");
+        option.value = optionDef.value;
+        option.label = optionDef.label;
+        suggestionList.appendChild(option);
+      });
+    };
+
+    if (!supportsAliasValueRef) {
+      delete condition.valueRef;
+    }
+
     const valueInput = document.createElement("input");
     valueInput.type = "text";
     valueInput.placeholder = "Value";
-    valueInput.value = getConditionScalarValue(condition);
+    valueInput.value = currentScalarValue;
+
+    if (supportsAliasValueRef) {
+      suggestionList = document.createElement("datalist");
+      suggestionList.className = "condition-variable-suggestions";
+      suggestionList.id = `${condition.id}-value-suggestions`;
+      valueInput.setAttribute("list", suggestionList.id);
+      syncSuggestionOptions(currentScalarValue);
+    }
+
     valueInput.addEventListener("input", (event) => {
-      condition.value = event.target.value;
+      const nextValue = event.target.value;
+      const exactAliasMatch = fieldOptions.find((option) => (
+        option.type === "alias" && option.value === normalizeValueItem(nextValue)
+      ));
+
+      condition.value = nextValue;
+      if (exactAliasMatch?.transformId) {
+        condition.valueRef = {
+          type: "alias",
+          transformId: exactAliasMatch.transformId,
+        };
+      } else {
+        delete condition.valueRef;
+      }
+      syncSuggestionOptions(nextValue);
       updatePreview();
     });
     row.appendChild(valueInput);
+    if (suggestionList) {
+      row.appendChild(suggestionList);
+    }
   }
   if (!isConditionRemoveInline) {
     row.appendChild(conditionRemoveButton);
@@ -1359,6 +1471,8 @@ function generateQueryString(group, indent = 0, isRoot = false) {
     const valueLabel =
       operatorSpec.lookup === "in" || operatorSpec.lookup === "range"
         ? `[${toValueList(condition.value).join(", ")}]`
+        : getAliasMetaForValue(condition)
+        ? getAliasMetaForValue(condition).alias
         : `"${getConditionScalarValue(condition)}"`;
     const prefix = condition.negated ? "NOT " : "";
     const line = `${"  ".repeat(indent + 1)}${prefix}${fieldLabel} ${operatorLabel} ${valueLabel}`;
@@ -1420,12 +1534,35 @@ function generateDjangoORM(group) {
     return formatScalarValue(value);
   };
 
+  const formatConditionValue = (condition, lookup) => {
+    const aliasMeta = getAliasMetaForValue(condition);
+    if (aliasMeta) {
+      imports.add("F");
+      return `F('${aliasMeta.alias}')`;
+    }
+    return formatValue(condition.value, lookup);
+  };
+
   const registerTransformMeta = (meta) => {
     if (!meta || !meta.definition) return;
     const sourceValue =
       meta.source.kind === "alias" ? meta.source.value : toDjangoPath(meta.source.value || "pk");
-    const expression = `${meta.definition.djangoName}('${sourceValue}')`;
     imports.add(meta.definition.djangoName);
+    let expression = `${meta.definition.djangoName}('${sourceValue}')`;
+    if (
+      meta.behavior === "annotation" &&
+      meta.source.kind === "field" &&
+      !(meta.source.value || "").includes(".")
+    ) {
+      imports.add("Subquery");
+      imports.add("Value");
+      expression = (
+        "Subquery(queryset.order_by()"
+        + `.annotate(_dqe_scalar_group=Value(1)).values('_dqe_scalar_group')`
+        + `.annotate(_dqe_scalar_value=${meta.definition.djangoName}('${sourceValue}'))`
+        + `.values('_dqe_scalar_value')[:1])`
+      );
+    }
     if (meta.behavior === "annotation") {
       if (!annotations.has(meta.alias)) {
         annotations.set(meta.alias, expression);
@@ -1470,7 +1607,7 @@ function generateDjangoORM(group) {
         targetPath = "pk";
       }
 
-      const valueExpression = formatValue(condition.value, operatorSpec.lookup);
+      const valueExpression = formatConditionValue(condition, operatorSpec.lookup);
 
       const qObject = `Q(${targetPath}${suffix}=${valueExpression})`;
       const expression = isNegated ? `~(${qObject})` : qObject;

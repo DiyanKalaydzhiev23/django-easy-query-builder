@@ -10,7 +10,7 @@ from model_bakery import baker
 
 from django_easy_query_builder.builders import QueryBuilder
 from django_easy_query_builder.mixins import QueryBuilderAdminMixin
-from django_easy_query_builder.parsers import StructuredQueryParser
+from django_easy_query_builder.parsers import AliasReference, StructuredQueryParser
 from django_easy_query_builder.validators import QTreeValidator
 from examples.models import Car, Country, Manufacturer, Person
 
@@ -199,6 +199,41 @@ def test_structured_query_parser_supports_dunder_lookup_operators() -> None:
         {"op": "&"},
         {"not": {"last_name": "Petrov"}},
     ]
+
+
+def test_structured_query_parser_supports_alias_value_references() -> None:
+    payload = {
+        "logicalOperator": "AND",
+        "conditions": [
+            {
+                "id": "condition-transform",
+                "field": "cars",
+                "operator": "equals",
+                "value": "",
+                "negated": False,
+                "isVariableOnly": True,
+                "transforms": [{"id": "transform-count-cars", "value": "count"}],
+            },
+            {
+                "id": "condition-filter",
+                "field": "age",
+                "operator": "greater_than",
+                "value": "count_cars",
+                "valueRef": {
+                    "type": "alias",
+                    "transformId": "transform-count-cars",
+                },
+                "negated": False,
+                "isVariableOnly": False,
+            },
+        ],
+        "groups": [],
+        "negated": False,
+    }
+
+    tree = StructuredQueryParser(json.dumps(payload)).parse()
+
+    assert tree == [{"age__gt": AliasReference("count_cars")}]
 
 
 @pytest.mark.django_db
@@ -423,3 +458,160 @@ def test_admin_mixin_supports_lookup_matrix_except_in_isnull_range(
 
     result_ids = set(admin_instance.get_queryset(request).values_list("id", flat=True))
     assert result_ids == expected_ids
+
+
+@pytest.mark.django_db
+def test_admin_mixin_supports_alias_value_references() -> None:
+    class PersonAdmin(QueryBuilderAdminMixin, admin.ModelAdmin):
+        model = Person
+        advanced_search_fields = ["age", "cars"]
+
+    admin_instance = PersonAdmin(Person, admin.site)
+
+    country = baker.make(Country, name="Germany")
+    manufacturer = baker.make(Manufacturer, name="VW", country=country)
+    golf = baker.make(
+        Car,
+        model="Golf",
+        manufacturer=manufacturer,
+        year=2020,
+        price=Decimal("20000.00"),
+        is_electric=False,
+    )
+    passat = baker.make(
+        Car,
+        model="Passat",
+        manufacturer=manufacturer,
+        year=2021,
+        price=Decimal("25000.00"),
+        is_electric=False,
+    )
+
+    younger = baker.make(Person, age=1)
+    younger.cars.add(golf, passat)
+
+    older = baker.make(Person, age=3)
+    older.cars.add(golf, passat)
+
+    payload = {
+        "logicalOperator": "AND",
+        "conditions": [
+            {
+                "id": "condition-transform",
+                "field": "cars",
+                "operator": "equals",
+                "value": "",
+                "negated": False,
+                "isVariableOnly": True,
+                "transforms": [{"id": "transform-count-cars", "value": "count"}],
+            },
+            {
+                "id": "condition-filter",
+                "field": "age",
+                "operator": "greater_than",
+                "value": "count_cars",
+                "negated": False,
+                "isVariableOnly": False,
+            },
+        ],
+        "groups": [],
+        "negated": False,
+    }
+
+    request = RequestFactory().get(
+        "/admin/examples/person/",
+        {"advanced_query": json.dumps(payload)},
+    )
+
+    result_ids = set(admin_instance.get_queryset(request).values_list("id", flat=True))
+    assert result_ids == {older.id}
+
+
+@pytest.mark.django_db
+def test_admin_mixin_supports_scalar_alias_value_references() -> None:
+    class PersonAdmin(QueryBuilderAdminMixin, admin.ModelAdmin):
+        model = Person
+        advanced_search_fields = ["age"]
+
+    admin_instance = PersonAdmin(Person, admin.site)
+
+    younger = baker.make(Person, age=10)
+    middle = baker.make(Person, age=20)
+    older = baker.make(Person, age=30)
+
+    payload = {
+        "logicalOperator": "AND",
+        "conditions": [
+            {
+                "id": "condition-transform",
+                "field": "age",
+                "operator": "equals",
+                "value": "",
+                "negated": False,
+                "isVariableOnly": True,
+                "transforms": [{"id": "transform-avg-age", "value": "avg"}],
+            },
+            {
+                "id": "condition-filter",
+                "field": "age",
+                "operator": "greater_than",
+                "value": "avg_age",
+                "negated": False,
+                "isVariableOnly": False,
+            },
+        ],
+        "groups": [],
+        "negated": False,
+    }
+
+    request = RequestFactory().get(
+        "/admin/examples/person/",
+        {"advanced_query": json.dumps(payload)},
+    )
+
+    result_ids = set(admin_instance.get_queryset(request).values_list("id", flat=True))
+    assert result_ids == {older.id}
+    assert younger.id not in result_ids
+    assert middle.id not in result_ids
+
+
+@pytest.mark.django_db
+def test_admin_mixin_rejects_unknown_alias_value_reference() -> None:
+    class PersonAdmin(QueryBuilderAdminMixin, admin.ModelAdmin):
+        model = Person
+        advanced_search_fields = ["age", "cars"]
+
+    admin_instance = PersonAdmin(Person, admin.site)
+
+    payload = {
+        "logicalOperator": "AND",
+        "conditions": [
+            {
+                "id": "condition-transform",
+                "field": "cars",
+                "operator": "equals",
+                "value": "",
+                "negated": False,
+                "isVariableOnly": True,
+                "transforms": [{"id": "transform-count-cars", "value": "count"}],
+            },
+            {
+                "id": "condition-filter",
+                "field": "age",
+                "operator": "greater_than",
+                "value": "avvg_age",
+                "negated": False,
+                "isVariableOnly": False,
+            },
+        ],
+        "groups": [],
+        "negated": False,
+    }
+
+    request = RequestFactory().get(
+        "/admin/examples/person/",
+        {"advanced_query": json.dumps(payload)},
+    )
+
+    with pytest.raises(SuspiciousOperation, match="Unknown variable 'avvg_age'"):
+        admin_instance.get_queryset(request)

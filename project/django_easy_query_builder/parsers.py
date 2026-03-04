@@ -1,8 +1,15 @@
 import json
 import re
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
 FilterNode = Union[List["FilterNode"], Dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class AliasReference:
+    alias: str
+
 
 DJANGO_OPERATOR_SEQUENCE = (
     "exact",
@@ -56,7 +63,7 @@ _SUPPORTED_TRANSFORMS = {"count", "sum", "avg", "min", "max"}
 _FIELD_SEGMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 ScalarValue = Union[str, int, float, bool, None]
-NormalizedValue = Union[ScalarValue, List[ScalarValue]]
+NormalizedValue = Union[ScalarValue, List[ScalarValue], AliasReference]
 
 
 class QueryParser:
@@ -175,6 +182,7 @@ class StructuredQueryParser:
         "field",
         "operator",
         "value",
+        "valueRef",
         "negated",
         "transforms",
         "isVariableOnly",
@@ -330,7 +338,18 @@ class StructuredQueryParser:
 
         field_path = self._to_django_path(field)
         lookup, is_negated_operator = self._resolve_operator(operator, field_path)
-        value = self._normalize_value(lookup, condition.get("value", ""))
+        value_ref = self._parse_alias_reference(
+            condition.get("valueRef"),
+            condition.get("value", ""),
+        )
+        if value_ref is not None:
+            if lookup in {"in", "range", "isnull"}:
+                raise SyntaxError(
+                    f"condition.valueRef is not supported for the '{lookup}' lookup."
+                )
+            value: NormalizedValue = value_ref
+        else:
+            value = self._normalize_value(lookup, condition.get("value", ""))
         key = field_path if lookup == "exact" else f"{field_path}__{lookup}"
         node: FilterNode = {key: value}
 
@@ -498,16 +517,47 @@ class StructuredQueryParser:
                 ):
                     raise SyntaxError(f"Unsupported transform '{transform_value}'.")
 
-        field_ref = condition.get("fieldRef")
-        if field_ref is not None:
-            if not isinstance(field_ref, dict):
-                raise SyntaxError("condition.fieldRef must be an object when provided.")
-            self._validate_keys(field_ref, self._FIELD_REF_KEYS, "fieldRef")
-            field_ref_type = field_ref.get("type")
-            if field_ref_type is not None and field_ref_type != "alias":
-                raise SyntaxError(
-                    "condition.fieldRef.type must be 'alias' when provided."
-                )
+        self._validate_alias_ref_metadata(
+            condition.get("fieldRef"), "condition.fieldRef"
+        )
+        self._validate_alias_ref_metadata(
+            condition.get("valueRef"), "condition.valueRef"
+        )
+
+    def _validate_alias_ref_metadata(self, ref: object, label: str) -> None:
+        if ref is None:
+            return
+
+        if not isinstance(ref, dict):
+            raise SyntaxError(f"{label} must be an object when provided.")
+
+        context = label.rsplit(".", 1)[-1]
+        self._validate_keys(ref, self._FIELD_REF_KEYS, context)
+        ref_type = ref.get("type")
+        if ref_type is not None and ref_type != "alias":
+            raise SyntaxError(f"{label}.type must be 'alias' when provided.")
+
+    def _parse_alias_reference(
+        self,
+        ref: object,
+        raw_value: object,
+    ) -> Optional[AliasReference]:
+        if ref is None:
+            return None
+
+        self._validate_alias_ref_metadata(ref, "condition.valueRef")
+        transform_id = ref.get("transformId")
+        if not isinstance(transform_id, str) or not transform_id.strip():
+            raise SyntaxError(
+                "condition.valueRef.transformId must be a non-empty string."
+            )
+
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            raise SyntaxError(
+                "condition.value must be a non-empty string when condition.valueRef is provided."
+            )
+
+        return AliasReference(raw_value.strip())
 
     def _to_django_path(self, field: str) -> str:
         orm_path = field.strip().replace(".", "__")

@@ -1,6 +1,10 @@
 from typing import Dict, List, Set, Tuple
 
-from django_easy_query_builder.parsers import ALLOWED_DJANGO_OPERATORS, FilterNode
+from django_easy_query_builder.parsers import (
+    ALLOWED_DJANGO_OPERATORS,
+    AliasReference,
+    FilterNode,
+)
 
 
 class QTreeValidator:
@@ -10,10 +14,14 @@ class QTreeValidator:
     def __init__(
         self,
         allowed_fields: List[str],
+        allowed_aliases: List[str] | Set[str] | None = None,
         allowed_lookups: Set[str] | None = None,
     ) -> None:
         self.allowed_fields = {
             field.strip() for field in allowed_fields if field.strip()
+        }
+        self.allowed_aliases = {
+            alias.strip() for alias in (allowed_aliases or []) if alias.strip()
         }
         self.allowed_lookups = (
             set(allowed_lookups)
@@ -43,7 +51,7 @@ class QTreeValidator:
                 handler(value)
                 return
 
-            self._validate_atom(key)
+            self._validate_atom(key, value)
             return
 
         raise ValueError(f"Unexpected tree node: {node!r}")
@@ -96,6 +104,10 @@ class QTreeValidator:
         joined = "__".join(path)
         if joined not in self.allowed_fields:
             raise ValueError(f"Field path '{joined}' is not allowed.")
+
+    def _check_alias(self, alias: str) -> None:
+        if alias not in self.allowed_aliases:
+            raise ValueError(f"Variable '{alias}' is not allowed.")
 
     def _check_lookup(self, lookup: str) -> None:
         if lookup not in self.allowed_lookups:
@@ -157,10 +169,16 @@ class QTreeValidator:
 
         return {f"{relation}__{key}": value}
 
-    def _validate_atom(self, field: str) -> None:
+    def _validate_atom(self, field: str, value: object) -> None:
         path, lookup = self._split_field(field)
-        self._check_field(path)
+        joined = "__".join(path)
+        if len(path) == 1 and joined in self.allowed_aliases:
+            pass
+        else:
+            self._check_field(path)
         self._check_lookup(lookup)
+        if isinstance(value, AliasReference):
+            self._check_alias(value.alias)
 
     def _unpack_dict(self, node: Dict[str, FilterNode]) -> Tuple[str, FilterNode]:
         if not node:

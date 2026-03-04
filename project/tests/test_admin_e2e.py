@@ -201,3 +201,63 @@ def test_admin_changelist_applies_count_transform_filter(admin_client) -> None:
 
     assert second_response.status_code == 200
     assert {obj.id for obj in second_response.context["cl"].result_list} == {maria.id}
+
+
+@pytest.mark.django_db
+def test_admin_changelist_invalid_variable_shows_message_and_does_not_crash(
+    admin_client,
+) -> None:
+    maria = Person.objects.create(
+        first_name="Maria",
+        last_name="Petrova",
+        age=30,
+        email="maria@example.com",
+        date_of_birth=date(1995, 1, 1),
+    )
+    ivan = Person.objects.create(
+        first_name="Ivan",
+        last_name="Ivanov",
+        age=33,
+        email="ivan@example.com",
+        date_of_birth=date(1992, 1, 1),
+    )
+
+    payload = {
+        "id": "group-1",
+        "logicalOperator": "AND",
+        "negated": False,
+        "conditions": [
+            {
+                "id": "condition-transform",
+                "field": "age",
+                "operator": "equals",
+                "value": "",
+                "negated": False,
+                "isVariableOnly": True,
+                "transforms": [{"id": "transform-avg-age", "value": "avg"}],
+            },
+            {
+                "id": "condition-filter",
+                "field": "age",
+                "operator": "greater_than",
+                "value": "avg_agee",
+                "negated": False,
+                "isVariableOnly": False,
+            },
+        ],
+        "groups": [],
+    }
+
+    response = admin_client.get(
+        "/admin/examples/person/",
+        {"advanced_query": json.dumps(payload)},
+    )
+
+    assert response.status_code == 200
+    assert {obj.id for obj in response.context["cl"].result_list} == {
+        maria.id,
+        ivan.id,
+    }
+
+    messages = [message.message for message in response.context["messages"]]
+    assert "Invalid advanced query payload: Unknown variable 'avg_agee'." in messages

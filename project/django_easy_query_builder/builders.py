@@ -2,9 +2,9 @@ from operator import and_, or_
 from typing import Any, Callable, Iterable, List, Optional
 
 from django.db import models
-from django.db.models import OuterRef, Q, Subquery
+from django.db.models import F, OuterRef, Q, Subquery
 
-from django_easy_query_builder.parsers import FilterNode
+from django_easy_query_builder.parsers import AliasReference, FilterNode
 
 
 class QueryBuilder:
@@ -36,7 +36,7 @@ class QueryBuilder:
                 return self._combine_nodes(node[key], symbol)
 
         field, value = next(iter(node.items()))
-        return Q(**{field: value})
+        return Q(**{field: self._resolve_filter_value(value)})
 
     def _build_from_sequence(self, nodes: Iterable[FilterNode]) -> Q:
         result: Q | None = None
@@ -108,6 +108,11 @@ class QueryBuilder:
             return {key: self._prefix_tree_fields(value, relation)}
 
         return {f"{relation}__{key}": value}
+
+    def _resolve_filter_value(self, value: object) -> object:
+        if isinstance(value, AliasReference):
+            return F(value.alias)
+        return value
 
     def _operator_for_symbol(self, symbol: str) -> Callable[[Q, Q], Q]:
         try:
