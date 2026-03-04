@@ -198,6 +198,7 @@ describe("multi-value editor behavior", () => {
 
     builder.renderApp?.();
     expect(document.querySelectorAll(".condition-value-item").length).toBe(2);
+    expect(document.querySelectorAll(".condition-value-controls .btn-icon").length).toBe(1);
 
     const readable = builder.generateQueryString(builder.queryState, 0, true);
     const django = builder.generateDjangoORM(builder.queryState);

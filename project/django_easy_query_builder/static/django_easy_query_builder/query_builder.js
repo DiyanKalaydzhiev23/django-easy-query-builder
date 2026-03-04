@@ -1211,6 +1211,17 @@ function renderCondition(parentGroup, index) {
   });
   row.appendChild(operatorSelect);
 
+  const conditionRemoveButton = document.createElement("button");
+  conditionRemoveButton.type = "button";
+  conditionRemoveButton.className = "btn btn-ghost btn-icon";
+  conditionRemoveButton.setAttribute("aria-label", "Remove condition");
+  conditionRemoveButton.appendChild(createIcon("trash"));
+  conditionRemoveButton.addEventListener("click", () => {
+    parentGroup.conditions.splice(index, 1);
+    renderApp();
+  });
+  let isConditionRemoveInline = false;
+
   const operatorSpec = resolveOperatorSpec(condition.operator);
   if (operatorSpec.lookup === "range") {
     const values = getConditionRangeValues(condition);
@@ -1304,6 +1315,8 @@ function renderCondition(parentGroup, index) {
 
     valueControls.appendChild(addInput);
     valueControls.appendChild(addButton);
+    valueControls.appendChild(conditionRemoveButton);
+    isConditionRemoveInline = true;
     valueGroup.appendChild(valueControls);
     row.appendChild(valueGroup);
   } else {
@@ -1317,17 +1330,9 @@ function renderCondition(parentGroup, index) {
     });
     row.appendChild(valueInput);
   }
-
-  const removeButton = document.createElement("button");
-  removeButton.type = "button";
-  removeButton.className = "btn btn-ghost btn-icon";
-  removeButton.setAttribute("aria-label", "Remove condition");
-  removeButton.appendChild(createIcon("trash"));
-  removeButton.addEventListener("click", () => {
-    parentGroup.conditions.splice(index, 1);
-    renderApp();
-  });
-  row.appendChild(removeButton);
+  if (!isConditionRemoveInline) {
+    row.appendChild(conditionRemoveButton);
+  }
 
   return row;
 }

@@ -349,6 +349,7 @@ a:hover {
 
 .condition-value-controls {
   display: flex;
+  align-items: center;
   gap: 0.4rem;
 }
 
