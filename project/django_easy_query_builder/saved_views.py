@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 JSONPrimitive = str | int | float | bool | None
@@ -5,10 +6,6 @@ JSONValue = JSONPrimitive | list["JSONValue"] | dict[str, "JSONValue"]
 
 _VOLATILE_QUERY_KEYS = {"id", "fieldRef", "valueRef"}
 _VOLATILE_TRANSFORM_KEYS = {"id"}
-
-_FNV_OFFSET_BASIS_64 = 1469598103934665603
-_FNV_PRIME_64 = 1099511628211
-_UINT64_MASK = (1 << 64) - 1
 
 
 def canonicalize_query_payload(value: JSONValue) -> JSONValue:
@@ -47,14 +44,10 @@ def canonicalize_query_payload_json(payload: dict[str, JSONValue]) -> str:
     )
 
 
-def hash_string_fnv1a_64(value: str) -> str:
-    hash_value = _FNV_OFFSET_BASIS_64
-    for byte in value.encode("utf-8"):
-        hash_value ^= byte
-        hash_value = (hash_value * _FNV_PRIME_64) & _UINT64_MASK
-    return f"{hash_value:016x}"
+def hash_string_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def build_query_hash(payload: dict[str, JSONValue]) -> str:
     canonical_json = canonicalize_query_payload_json(payload)
-    return hash_string_fnv1a_64(canonical_json)
+    return hash_string_sha256(canonical_json)

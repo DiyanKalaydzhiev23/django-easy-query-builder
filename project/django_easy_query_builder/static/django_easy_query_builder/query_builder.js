@@ -361,14 +361,12 @@ const saveQueryUpdateButton = document.getElementById("save-query-update");
 const saveQueryError = document.getElementById("save-query-error");
 const PREVIEW_HIDDEN_CLASS = "is-hidden";
 const SAVED_QUERY_HASHES = new Set(INITIAL_SAVED_QUERY_HASHES);
+const SAVED_QUERY_SIGNATURES = new Set();
 const SAVED_QUERY_MAP = new Map(
   INITIAL_SAVED_QUERIES.map((item) => [item.id, item])
 );
 const VOLATILE_QUERY_KEYS = new Set(["id", "fieldRef", "valueRef"]);
 const VOLATILE_TRANSFORM_KEYS = new Set(["id"]);
-const FNV_OFFSET_BASIS_64 = 1469598103934665603n;
-const FNV_PRIME_64 = 1099511628211n;
-const UINT64_MASK = (1n << 64n) - 1n;
 
 let latestDerivedTransformState = null;
 let activeSavedQueryId = "";
@@ -948,22 +946,14 @@ function stableStringify(value) {
   return JSON.stringify(value);
 }
 
-function hashStringFNV1A64(value) {
-  const encoder = new TextEncoder();
-  const bytes = encoder.encode(value);
-  let hash = FNV_OFFSET_BASIS_64;
-
-  bytes.forEach((byte) => {
-    hash ^= BigInt(byte);
-    hash = (hash * FNV_PRIME_64) & UINT64_MASK;
-  });
-
-  return hash.toString(16).padStart(16, "0");
+function computeQuerySignature(payload) {
+  const canonicalPayload = canonicalizeQueryPayload(payload);
+  return stableStringify(canonicalPayload);
 }
 
+// Backward-compatible export name.
 function computeQueryHash(payload) {
-  const canonicalPayload = canonicalizeQueryPayload(payload);
-  return hashStringFNV1A64(stableStringify(canonicalPayload));
+  return computeQuerySignature(payload);
 }
 
 function setSaveQueryError(message = "") {
@@ -992,20 +982,29 @@ function setSaveQueryModeHint(message = "") {
 
 function rebuildSavedQueryHashes() {
   SAVED_QUERY_HASHES.clear();
+  SAVED_QUERY_SIGNATURES.clear();
   SAVED_QUERY_MAP.forEach((savedQuery) => {
     const queryHash = normalizeValueItem(savedQuery?.queryHash);
     if (queryHash) {
       SAVED_QUERY_HASHES.add(queryHash);
     }
+
+    if (savedQuery?.query && typeof savedQuery.query === "object") {
+      const signature = computeQuerySignature(savedQuery.query);
+      if (signature) {
+        SAVED_QUERY_SIGNATURES.add(signature);
+      }
+    }
   });
 }
 
-function findSavedQueryByHash(queryHash) {
-  if (!queryHash) return null;
-  const normalizedHash = normalizeValueItem(queryHash);
-  if (!normalizedHash) return null;
+function findSavedQueryBySignature(signature) {
+  if (!signature) return null;
   for (const savedQuery of SAVED_QUERY_MAP.values()) {
-    if (normalizeValueItem(savedQuery?.queryHash) === normalizedHash) {
+    if (!savedQuery?.query || typeof savedQuery.query !== "object") {
+      continue;
+    }
+    if (computeQuerySignature(savedQuery.query) === signature) {
       return savedQuery;
     }
   }
@@ -1019,8 +1018,8 @@ function getActiveSavedQuery() {
 
 function syncActiveSavedQueryFromCurrentState() {
   const payload = serializeGroup(queryState);
-  const queryHash = computeQueryHash(payload);
-  const matchedSavedQuery = findSavedQueryByHash(queryHash);
+  const signature = computeQuerySignature(payload);
+  const matchedSavedQuery = findSavedQueryBySignature(signature);
   activeSavedQueryId = matchedSavedQuery?.id || "";
 
   if (savedQuerySelect) {
@@ -1090,8 +1089,8 @@ function updateSaveQueryAvailability() {
   }
 
   const payload = serializeGroup(queryState);
-  const queryHash = computeQueryHash(payload);
-  const matchedSavedQuery = findSavedQueryByHash(queryHash);
+  const signature = computeQuerySignature(payload);
+  const matchedSavedQuery = findSavedQueryBySignature(signature);
   const activeSavedQuery = getActiveSavedQuery();
   const alreadySavedWithoutActive = (
     matchedSavedQuery && (!activeSavedQuery || matchedSavedQuery.id !== activeSavedQuery.id)
@@ -1116,10 +1115,10 @@ async function saveCurrentQueryView(mode) {
   }
 
   const payload = serializeGroup(queryState);
-  const queryHash = computeQueryHash(payload);
+  const signature = computeQuerySignature(payload);
   const activeSavedQuery = getActiveSavedQuery();
 
-  if (mode === "create" && SAVED_QUERY_HASHES.has(queryHash)) {
+  if (mode === "create" && SAVED_QUERY_SIGNATURES.has(signature)) {
     setSaveQueryError("This query is already saved.");
     updateSaveQueryAvailability();
     return;
@@ -1161,7 +1160,7 @@ async function saveCurrentQueryView(mode) {
     }
 
     if (response.status === 201 || response.status === 200 || response.status === 409) {
-      const savedHash = normalizeValueItem(responsePayload.queryHash) || queryHash;
+      const savedHash = normalizeValueItem(responsePayload.queryHash);
       const savedId = normalizeValueItem(responsePayload.id || activeSavedQuery?.id);
       if (savedId && (response.status === 201 || response.status === 200)) {
         SAVED_QUERY_MAP.set(savedId, {

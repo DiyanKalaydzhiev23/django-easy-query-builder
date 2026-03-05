@@ -8,7 +8,7 @@ class View(models.Model):
     name = models.CharField(max_length=120)
     model_label = models.CharField(max_length=255, db_index=True)
     query_payload = models.JSONField()
-    query_hash = models.CharField(max_length=16, db_index=True)
+    query_hash = models.CharField(max_length=64, db_index=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
