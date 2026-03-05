@@ -16,7 +16,6 @@ class PersonAdmin(AdvancedSearchAdminMixin, admin.ModelAdmin):
         "cars",
         "age",
     ]
-    # Todo add all option for relations filtering
 
     def get_query_builder_frontend_config(
         self, request: HttpRequest

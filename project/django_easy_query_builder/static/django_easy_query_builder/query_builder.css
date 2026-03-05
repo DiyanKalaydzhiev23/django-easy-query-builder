@@ -88,6 +88,13 @@
   flex-wrap: wrap;
 }
 
+.advanced-query-builder-admin .aqb-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .advanced-query-builder-admin .card-title {
   margin: 0;
   font-size: 1rem;
@@ -189,11 +196,18 @@
 }
 
 .advanced-query-builder-admin .group-header,
-.advanced-query-builder-admin .group-actions,
 .advanced-query-builder-admin .group-meta {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.advanced-query-builder-admin .group-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   gap: 0.5rem;
   flex-wrap: wrap;
 }
@@ -245,6 +259,32 @@
   gap: 0.4rem;
 }
 
+.advanced-query-builder-admin .transform-item-subquery {
+  padding: 0.35rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--aqb-border) 70%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--aqb-bg) 60%, var(--aqb-panel));
+}
+
+.advanced-query-builder-admin .transform-list {
+  flex: 1 1 100%;
+}
+
+.advanced-query-builder-admin .transform-control {
+  gap: 0.5rem;
+}
+
+.advanced-query-builder-admin .transform-control select {
+  flex: 0 1 170px;
+  min-width: 130px;
+}
+
+.advanced-query-builder-admin .transform-confirm-button,
+.advanced-query-builder-admin .transform-cancel-button,
+.advanced-query-builder-admin .transform-edit-button {
+  flex: 0 0 auto;
+}
+
 .advanced-query-builder-admin .transform-variable {
   display: flex;
   flex-direction: column;
@@ -252,7 +292,10 @@
   min-width: 220px;
 }
 
-.advanced-query-builder-admin .transform-variable-hint,
+.advanced-query-builder-admin .transform-variable-compact {
+  min-width: auto;
+}
+
 .advanced-query-builder-admin .variable-chip-detail {
   color: var(--aqb-muted);
   font-size: 0.8rem;
@@ -265,6 +308,7 @@
   background: var(--aqb-bg);
   padding: 0.2rem 0.5rem;
   font-size: 0.78rem;
+  font-weight: 600;
 }
 
 .advanced-query-builder-admin .transform-badge {
@@ -372,6 +416,16 @@
   padding: 0.3rem 0.55rem;
   font-size: 0.82rem;
   flex: 1 1 150px;
+}
+
+.advanced-query-builder-admin select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, color-mix(in srgb, var(--aqb-muted) 75%, transparent) 50%),
+    linear-gradient(135deg, color-mix(in srgb, var(--aqb-muted) 75%, transparent) 50%, transparent 50%);
+  background-position: calc(100% - 13px) calc(50% - 2px), calc(100% - 9px) calc(50% - 2px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 1.8rem;
 }
 
 .advanced-query-builder-admin input[type="text"] {

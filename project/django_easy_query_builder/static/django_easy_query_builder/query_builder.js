@@ -555,7 +555,7 @@ function getFieldOptionsForGroup(groupId) {
   aliasOptions.forEach((meta) => {
     options.push({
       value: meta.alias,
-      label: `${meta.displayLabel} → ${meta.alias}`,
+      label: `Variable: ${meta.alias}`,
       type: "alias",
       transformId: meta.id,
     });
@@ -1104,29 +1104,24 @@ function renderCondition(parentGroup, index) {
     if (!definition) return;
 
     const transformItem = document.createElement("div");
-    transformItem.className = "transform-item";
+    transformItem.className = "transform-item transform-item-subquery";
 
     const meta = derived.transformsById?.get(transform.id);
     const behavior = meta?.behavior === "annotation" ? "annotation" : "aggregation";
     const aliasName = meta?.alias || makeAlias(transform.value, meta?.source?.value || condition.field || "value");
-    const displaySource = meta?.displayLabel || `${definition.label}(${meta?.source?.value || condition.field || "*"})`;
     const variableWrapper = document.createElement("div");
-    variableWrapper.className = "transform-variable";
+    variableWrapper.className = "transform-variable transform-variable-compact";
     const variableHeader = document.createElement("div");
     variableHeader.className = "transform-variable-header";
     const typeBadge = document.createElement("span");
     typeBadge.className = `transform-badge transform-badge-${behavior}`;
-    typeBadge.textContent = behavior === "annotation" ? "Annotation" : "Aggregation";
+    typeBadge.textContent = "Subquery";
     variableHeader.appendChild(typeBadge);
     const aliasPill = document.createElement("span");
     aliasPill.className = "transform-alias";
     aliasPill.textContent = aliasName;
     variableHeader.appendChild(aliasPill);
-    const variableHint = document.createElement("div");
-    variableHint.className = "transform-variable-hint";
-    variableHint.textContent = displaySource;
     variableWrapper.appendChild(variableHeader);
-    variableWrapper.appendChild(variableHint);
     transformItem.appendChild(variableWrapper);
 
     const functionSelect = document.createElement("select");
@@ -1491,29 +1486,24 @@ function renderVariableCondition(parentGroup, index) {
     if (!definition) return;
 
     const transformItem = document.createElement("div");
-    transformItem.className = "transform-item";
+    transformItem.className = "transform-item transform-item-subquery";
 
     const meta = derived.transformsById?.get(transform.id);
     const behavior = meta?.behavior === "annotation" ? "annotation" : "aggregation";
     const aliasName = meta?.alias || makeAlias(transform.value, meta?.source?.value || condition.field || "value");
-    const displaySource = meta?.displayLabel || `${definition.label}(${meta?.source?.value || condition.field || "*"})`;
     const variableWrapper = document.createElement("div");
-    variableWrapper.className = "transform-variable";
+    variableWrapper.className = "transform-variable transform-variable-compact";
     const variableHeader = document.createElement("div");
     variableHeader.className = "transform-variable-header";
     const typeBadge = document.createElement("span");
     typeBadge.className = `transform-badge transform-badge-${behavior}`;
-    typeBadge.textContent = behavior === "annotation" ? "Annotation" : "Aggregation";
+    typeBadge.textContent = "Subquery";
     variableHeader.appendChild(typeBadge);
     const aliasPill = document.createElement("span");
     aliasPill.className = "transform-alias";
     aliasPill.textContent = aliasName;
     variableHeader.appendChild(aliasPill);
-    const variableHint = document.createElement("div");
-    variableHint.className = "transform-variable-hint";
-    variableHint.textContent = displaySource;
     variableWrapper.appendChild(variableHeader);
-    variableWrapper.appendChild(variableHint);
     transformItem.appendChild(variableWrapper);
 
     const functionSelect = document.createElement("select");
@@ -1809,19 +1799,16 @@ function generateQueryString(group, indent = 0, isRoot = false) {
     const aliasMeta = getAliasMetaForCondition(condition);
     const baseField = aliasMeta ? aliasMeta.displayLabel || aliasMeta.alias : condition.field || "*";
     const fieldLabel =
-      transforms.length > 0
-        ? transforms.reduce((acc, transform) => {
-            const definition = TRANSFORM_MAP[transform.value];
-            return definition ? `${definition.label}(${acc})` : acc;
-          }, baseField)
+      transforms.length > 0 && lastTransformMeta
+        ? lastTransformMeta.alias
         : baseField;
 
     if (isAggregationOnly) {
       const aggregationDescription =
         transformMetas.length > 0
-          ? transformMetas.map((meta) => meta?.displayLabel || "").filter(Boolean).join(" → ")
+          ? transformMetas.map((meta) => meta?.alias || "").filter(Boolean).join(", ")
           : fieldLabel;
-      const aggregationLine = `${"  ".repeat(indent + 1)}Aggregation: ${aggregationDescription || fieldLabel}`;
+      const aggregationLine = `${"  ".repeat(indent + 1)}Subquery variable: ${aggregationDescription || fieldLabel}`;
       items.push(aggregationLine);
       return;
     }

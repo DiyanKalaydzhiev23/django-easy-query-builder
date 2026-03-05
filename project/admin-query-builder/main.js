@@ -751,7 +751,6 @@ function renderCondition(parentGroup, index) {
     const meta = derived.transformsById?.get(transform.id);
     const behavior = meta?.behavior === "annotation" ? "annotation" : "aggregation";
     const aliasName = meta?.alias || makeAlias(transform.value, meta?.source?.value || condition.field || "value");
-    const displaySource = meta?.displayLabel || `${definition.label}(${meta?.source?.value || condition.field || "*"})`;
     const variableWrapper = document.createElement("div");
     variableWrapper.className = "transform-variable";
     const variableHeader = document.createElement("div");
@@ -764,11 +763,7 @@ function renderCondition(parentGroup, index) {
     aliasPill.className = "transform-alias";
     aliasPill.textContent = aliasName;
     variableHeader.appendChild(aliasPill);
-    const variableHint = document.createElement("div");
-    variableHint.className = "transform-variable-hint";
-    variableHint.textContent = displaySource;
     variableWrapper.appendChild(variableHeader);
-    variableWrapper.appendChild(variableHint);
     transformItem.appendChild(variableWrapper);
 
     const functionSelect = document.createElement("select");
@@ -1138,7 +1133,6 @@ function renderVariableCondition(parentGroup, index) {
     const meta = derived.transformsById?.get(transform.id);
     const behavior = meta?.behavior === "annotation" ? "annotation" : "aggregation";
     const aliasName = meta?.alias || makeAlias(transform.value, meta?.source?.value || condition.field || "value");
-    const displaySource = meta?.displayLabel || `${definition.label}(${meta?.source?.value || condition.field || "*"})`;
     const variableWrapper = document.createElement("div");
     variableWrapper.className = "transform-variable";
     const variableHeader = document.createElement("div");
@@ -1151,11 +1145,7 @@ function renderVariableCondition(parentGroup, index) {
     aliasPill.className = "transform-alias";
     aliasPill.textContent = aliasName;
     variableHeader.appendChild(aliasPill);
-    const variableHint = document.createElement("div");
-    variableHint.className = "transform-variable-hint";
-    variableHint.textContent = displaySource;
     variableWrapper.appendChild(variableHeader);
-    variableWrapper.appendChild(variableHint);
     transformItem.appendChild(variableWrapper);
 
     const functionSelect = document.createElement("select");
