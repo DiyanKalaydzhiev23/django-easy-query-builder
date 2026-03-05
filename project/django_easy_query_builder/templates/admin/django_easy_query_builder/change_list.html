@@ -74,10 +74,12 @@ query = Q()</pre>
       </div>
       <form id="save-query-form" class="card-content aqb-modal-form">
         <input id="save-query-name" type="text" maxlength="120" placeholder="View name" required>
+        <p id="save-query-mode-hint" class="aqb-modal-note is-hidden"></p>
         <p id="save-query-error" class="aqb-modal-error is-hidden"></p>
         <div class="aqb-modal-actions">
           <button id="save-query-cancel" class="btn btn-outline btn-sm" type="button">Cancel</button>
-          <button id="save-query-confirm" class="btn btn-sm" type="submit">Save</button>
+          <button id="save-query-save-as-new" class="btn btn-outline btn-sm" type="button">Save as New</button>
+          <button id="save-query-update" class="btn btn-sm is-hidden" type="button">Update Existing</button>
         </div>
       </form>
     </div>

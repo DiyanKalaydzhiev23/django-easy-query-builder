@@ -101,3 +101,80 @@ def test_changelist_frontend_config_contains_saved_query_hashes(admin_client) ->
     assert len(config["savedQueries"]) == 1
     assert config["savedQueries"][0]["name"] == "Maria"
     assert config["savedQueries"][0]["query_payload"] == payload
+
+
+@pytest.mark.django_db
+def test_save_query_view_updates_existing_view(admin_client) -> None:
+    original_payload = _first_name_equals_payload("Maria", suffix="original")
+    updated_payload = _first_name_equals_payload("Ivan", suffix="updated")
+    saved = View.objects.create(
+        name="People: Maria",
+        model_label="examples.person",
+        query_hash=build_query_hash(original_payload),
+        query_payload=original_payload,
+    )
+
+    response = admin_client.post(
+        "/admin/examples/person/save-query/",
+        data=json.dumps(
+            {
+                "name": "People: Ivan",
+                "query": updated_payload,
+                "mode": "update",
+                "viewId": saved.id,
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == saved.id
+    assert payload["updated"] is True
+    assert payload["created"] is False
+
+    saved.refresh_from_db()
+    assert saved.name == "People: Ivan"
+    assert saved.query_hash == build_query_hash(updated_payload)
+    assert saved.query_payload == updated_payload
+
+
+@pytest.mark.django_db
+def test_save_query_view_update_conflict_returns_409(admin_client) -> None:
+    first_payload = _first_name_equals_payload("Maria", suffix="first")
+    second_payload = _first_name_equals_payload("Ivan", suffix="second")
+    first_view = View.objects.create(
+        name="People: Maria",
+        model_label="examples.person",
+        query_hash=build_query_hash(first_payload),
+        query_payload=first_payload,
+    )
+    second_view = View.objects.create(
+        name="People: Ivan",
+        model_label="examples.person",
+        query_hash=build_query_hash(second_payload),
+        query_payload=second_payload,
+    )
+
+    response = admin_client.post(
+        "/admin/examples/person/save-query/",
+        data=json.dumps(
+            {
+                "name": "Conflicting update",
+                "query": second_payload,
+                "mode": "update",
+                "viewId": first_view.id,
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["id"] == second_view.id
+    assert payload["updated"] is False
+    assert payload["created"] is False
+
+    first_view.refresh_from_db()
+    assert first_view.name == "People: Maria"
+    assert first_view.query_hash == build_query_hash(first_payload)

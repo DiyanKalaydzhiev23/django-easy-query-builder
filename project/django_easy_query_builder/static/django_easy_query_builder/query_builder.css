@@ -566,3 +566,9 @@
   font-size: 0.8rem;
   color: var(--aqb-danger);
 }
+
+.advanced-query-builder-admin .aqb-modal-note {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--aqb-muted);
+}

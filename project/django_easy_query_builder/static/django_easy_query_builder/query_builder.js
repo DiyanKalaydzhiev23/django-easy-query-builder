@@ -354,8 +354,10 @@ const clearQueryButton = document.getElementById("advanced-query-clear");
 const saveQueryModal = document.getElementById("save-query-modal");
 const saveQueryForm = document.getElementById("save-query-form");
 const saveQueryNameInput = document.getElementById("save-query-name");
+const saveQueryModeHint = document.getElementById("save-query-mode-hint");
 const saveQueryCancelButton = document.getElementById("save-query-cancel");
-const saveQueryConfirmButton = document.getElementById("save-query-confirm");
+const saveQuerySaveAsNewButton = document.getElementById("save-query-save-as-new");
+const saveQueryUpdateButton = document.getElementById("save-query-update");
 const saveQueryError = document.getElementById("save-query-error");
 const PREVIEW_HIDDEN_CLASS = "is-hidden";
 const SAVED_QUERY_HASHES = new Set(INITIAL_SAVED_QUERY_HASHES);
@@ -369,6 +371,7 @@ const FNV_PRIME_64 = 1099511628211n;
 const UINT64_MASK = (1n << 64n) - 1n;
 
 let latestDerivedTransformState = null;
+let activeSavedQueryId = "";
 
 function toDjangoPath(field) {
   return (field || "").replace(/\./g, "__");
@@ -975,17 +978,92 @@ function setSaveQueryError(message = "") {
   saveQueryError.classList.remove(PREVIEW_HIDDEN_CLASS);
 }
 
+function setSaveQueryModeHint(message = "") {
+  if (!saveQueryModeHint) return;
+  const normalized = normalizeValueItem(message);
+  if (!normalized) {
+    saveQueryModeHint.textContent = "";
+    saveQueryModeHint.classList.add(PREVIEW_HIDDEN_CLASS);
+    return;
+  }
+  saveQueryModeHint.textContent = normalized;
+  saveQueryModeHint.classList.remove(PREVIEW_HIDDEN_CLASS);
+}
+
+function rebuildSavedQueryHashes() {
+  SAVED_QUERY_HASHES.clear();
+  SAVED_QUERY_MAP.forEach((savedQuery) => {
+    const queryHash = normalizeValueItem(savedQuery?.queryHash);
+    if (queryHash) {
+      SAVED_QUERY_HASHES.add(queryHash);
+    }
+  });
+}
+
+function findSavedQueryByHash(queryHash) {
+  if (!queryHash) return null;
+  const normalizedHash = normalizeValueItem(queryHash);
+  if (!normalizedHash) return null;
+  for (const savedQuery of SAVED_QUERY_MAP.values()) {
+    if (normalizeValueItem(savedQuery?.queryHash) === normalizedHash) {
+      return savedQuery;
+    }
+  }
+  return null;
+}
+
+function getActiveSavedQuery() {
+  if (!activeSavedQueryId) return null;
+  return SAVED_QUERY_MAP.get(activeSavedQueryId) || null;
+}
+
+function syncActiveSavedQueryFromCurrentState() {
+  const payload = serializeGroup(queryState);
+  const queryHash = computeQueryHash(payload);
+  const matchedSavedQuery = findSavedQueryByHash(queryHash);
+  activeSavedQueryId = matchedSavedQuery?.id || "";
+
+  if (savedQuerySelect) {
+    savedQuerySelect.value = activeSavedQueryId || "";
+  }
+
+  return matchedSavedQuery;
+}
+
 function closeSaveQueryModal() {
   if (!saveQueryModal) return;
   saveQueryModal.classList.add(PREVIEW_HIDDEN_CLASS);
   saveQueryModal.setAttribute("aria-hidden", "true");
   setSaveQueryError("");
+  setSaveQueryModeHint("");
 }
 
 function openSaveQueryModal() {
   if (!saveQueryModal || !saveQueryNameInput) return;
+  const activeSavedQuery = getActiveSavedQuery();
+
   setSaveQueryError("");
-  saveQueryNameInput.value = "";
+  if (activeSavedQuery) {
+    saveQueryNameInput.value = activeSavedQuery.name;
+    setSaveQueryModeHint(`Editing "${activeSavedQuery.name}".`);
+    if (saveQueryUpdateButton) {
+      saveQueryUpdateButton.classList.remove(PREVIEW_HIDDEN_CLASS);
+      saveQueryUpdateButton.textContent = `Update "${activeSavedQuery.name}"`;
+    }
+    if (saveQuerySaveAsNewButton) {
+      saveQuerySaveAsNewButton.textContent = "Save as New";
+    }
+  } else {
+    saveQueryNameInput.value = "";
+    setSaveQueryModeHint("");
+    if (saveQueryUpdateButton) {
+      saveQueryUpdateButton.classList.add(PREVIEW_HIDDEN_CLASS);
+    }
+    if (saveQuerySaveAsNewButton) {
+      saveQuerySaveAsNewButton.textContent = "Save";
+    }
+  }
+
   saveQueryModal.classList.remove(PREVIEW_HIDDEN_CLASS);
   saveQueryModal.setAttribute("aria-hidden", "false");
   saveQueryNameInput.focus();
@@ -1013,15 +1091,21 @@ function updateSaveQueryAvailability() {
 
   const payload = serializeGroup(queryState);
   const queryHash = computeQueryHash(payload);
-  const alreadySaved = SAVED_QUERY_HASHES.has(queryHash);
-  saveQueryButton.disabled = alreadySaved;
-  saveQueryButton.title = alreadySaved
+  const matchedSavedQuery = findSavedQueryByHash(queryHash);
+  const activeSavedQuery = getActiveSavedQuery();
+  const alreadySavedWithoutActive = (
+    matchedSavedQuery && (!activeSavedQuery || matchedSavedQuery.id !== activeSavedQuery.id)
+  );
+
+  saveQueryButton.disabled = Boolean(alreadySavedWithoutActive);
+  saveQueryButton.title = alreadySavedWithoutActive
     ? "This query is already saved."
+    : activeSavedQuery
+    ? `Save changes for "${activeSavedQuery.name}" or save as new.`
     : "Save current query as a view.";
 }
 
-async function saveCurrentQueryView(event) {
-  event.preventDefault();
+async function saveCurrentQueryView(mode) {
   if (!SAVE_QUERY_URL || !saveQueryNameInput) return;
 
   const viewName = normalizeValueItem(saveQueryNameInput.value);
@@ -1033,15 +1117,24 @@ async function saveCurrentQueryView(event) {
 
   const payload = serializeGroup(queryState);
   const queryHash = computeQueryHash(payload);
+  const activeSavedQuery = getActiveSavedQuery();
 
-  if (SAVED_QUERY_HASHES.has(queryHash)) {
+  if (mode === "create" && SAVED_QUERY_HASHES.has(queryHash)) {
     setSaveQueryError("This query is already saved.");
     updateSaveQueryAvailability();
     return;
   }
 
-  if (saveQueryConfirmButton) {
-    saveQueryConfirmButton.disabled = true;
+  if (mode === "update" && !activeSavedQuery) {
+    setSaveQueryError("Select an existing saved view to update.");
+    return;
+  }
+
+  if (saveQuerySaveAsNewButton) {
+    saveQuerySaveAsNewButton.disabled = true;
+  }
+  if (saveQueryUpdateButton) {
+    saveQueryUpdateButton.disabled = true;
   }
   setSaveQueryError("");
 
@@ -1055,6 +1148,8 @@ async function saveCurrentQueryView(event) {
       body: JSON.stringify({
         name: viewName,
         query: payload,
+        mode,
+        viewId: mode === "update" ? activeSavedQuery?.id : null,
       }),
     });
 
@@ -1065,23 +1160,28 @@ async function saveCurrentQueryView(event) {
       responsePayload = {};
     }
 
-    if (response.status === 201 || response.status === 409) {
+    if (response.status === 201 || response.status === 200 || response.status === 409) {
       const savedHash = normalizeValueItem(responsePayload.queryHash) || queryHash;
-      if (savedHash) {
-        SAVED_QUERY_HASHES.add(savedHash);
-      }
-      const savedId = normalizeValueItem(responsePayload.id);
-      if (savedId) {
+      const savedId = normalizeValueItem(responsePayload.id || activeSavedQuery?.id);
+      if (savedId && (response.status === 201 || response.status === 200)) {
         SAVED_QUERY_MAP.set(savedId, {
           id: savedId,
           name: viewName,
           queryHash: savedHash,
           query: payload,
         });
+        rebuildSavedQueryHashes();
         initializeSavedQuerySelect();
       }
-      closeSaveQueryModal();
-      updateSaveQueryAvailability();
+      if (response.status === 201 || response.status === 200) {
+        if (savedId) {
+          activeSavedQueryId = savedId;
+        }
+        closeSaveQueryModal();
+      } else {
+        setSaveQueryError("This query already exists in another saved view.");
+      }
+      renderApp();
       return;
     }
 
@@ -1091,8 +1191,11 @@ async function saveCurrentQueryView(event) {
   } catch (_error) {
     setSaveQueryError("Unable to save this query view.");
   } finally {
-    if (saveQueryConfirmButton) {
-      saveQueryConfirmButton.disabled = false;
+    if (saveQuerySaveAsNewButton) {
+      saveQuerySaveAsNewButton.disabled = false;
+    }
+    if (saveQueryUpdateButton) {
+      saveQueryUpdateButton.disabled = false;
     }
   }
 }
@@ -1121,18 +1224,27 @@ function initializeSavedQuerySelect() {
       savedQuerySelect.appendChild(option);
     });
 
-  savedQuerySelect.addEventListener("change", () => {
+  savedQuerySelect.onchange = () => {
     const selectedId = savedQuerySelect.value;
-    if (!selectedId) return;
+    if (!selectedId) {
+      activeSavedQueryId = "";
+      updateSaveQueryAvailability();
+      return;
+    }
     const savedQuery = SAVED_QUERY_MAP.get(selectedId);
     if (!savedQuery || !savedQuery.query) return;
 
+    activeSavedQueryId = selectedId;
     const params = new URLSearchParams(window.location.search);
     params.set(ADVANCED_QUERY_PARAM, JSON.stringify(savedQuery.query));
     params.delete("p");
     const search = params.toString();
     window.location.search = search ? `?${search}` : window.location.pathname;
-  });
+  };
+
+  savedQuerySelect.value = activeSavedQueryId && SAVED_QUERY_MAP.has(activeSavedQueryId)
+    ? activeSavedQueryId
+    : "";
 }
 
 function applyAdvancedQuery() {
@@ -1164,6 +1276,7 @@ function clearAdvancedQuery() {
 }
 
 function initializeAdminActions() {
+  rebuildSavedQueryHashes();
   initializeSavedQuerySelect();
 
   if (applyQueryButton) {
@@ -1199,7 +1312,23 @@ function initializeAdminActions() {
   }
 
   if (saveQueryForm) {
-    saveQueryForm.addEventListener("submit", saveCurrentQueryView);
+    saveQueryForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const hasActiveSavedView = Boolean(getActiveSavedQuery());
+      saveCurrentQueryView(hasActiveSavedView ? "update" : "create");
+    });
+  }
+
+  if (saveQuerySaveAsNewButton) {
+    saveQuerySaveAsNewButton.addEventListener("click", () => {
+      saveCurrentQueryView("create");
+    });
+  }
+
+  if (saveQueryUpdateButton) {
+    saveQueryUpdateButton.addEventListener("click", () => {
+      saveCurrentQueryView("update");
+    });
   }
 }
 
@@ -1209,6 +1338,7 @@ function renderApp() {
   queryRoot.innerHTML = "";
   queryRoot.appendChild(renderGroup(queryState, true));
   updatePreview(derived);
+  syncActiveSavedQueryFromCurrentState();
   updateSaveQueryAvailability();
 }
 

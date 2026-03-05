@@ -284,7 +284,9 @@ class QueryBuilderAdminMixin:
             return JsonResponse({"detail": "Permission denied."}, status=403)
 
         try:
-            view_name, structured_payload = self._parse_save_query_request(request)
+            view_name, structured_payload, mode, view_id = (
+                self._parse_save_query_request(request)
+            )
             allowed_lookups = self.get_allowed_query_lookups()
 
             transform_catalog, alias_definitions = self._collect_transform_catalog(
@@ -322,6 +324,55 @@ class QueryBuilderAdminMixin:
             )
 
         query_hash = build_query_hash(structured_payload)
+        model_label = self.get_saved_query_model_label()
+        if mode == "update":
+            if view_id is None:
+                return JsonResponse(
+                    {"detail": "viewId is required when mode is 'update'."},
+                    status=400,
+                )
+
+            saved_view = View.objects.filter(
+                model_label=model_label, pk=view_id
+            ).first()
+            if saved_view is None:
+                return JsonResponse({"detail": "Saved view not found."}, status=404)
+
+            duplicate_view = (
+                View.objects.filter(model_label=model_label, query_hash=query_hash)
+                .exclude(pk=saved_view.pk)
+                .first()
+            )
+            if duplicate_view is not None:
+                return JsonResponse(
+                    {
+                        "id": duplicate_view.pk,
+                        "queryHash": duplicate_view.query_hash,
+                        "created": False,
+                        "updated": False,
+                    },
+                    status=409,
+                )
+
+            saved_view.name = view_name
+            saved_view.query_payload = structured_payload
+            saved_view.query_hash = query_hash
+            if request.user.is_authenticated and saved_view.created_by_id is None:
+                saved_view.created_by = request.user
+            saved_view.save(
+                update_fields=["name", "query_payload", "query_hash", "created_by"]
+            )
+
+            return JsonResponse(
+                {
+                    "id": saved_view.pk,
+                    "queryHash": saved_view.query_hash,
+                    "created": False,
+                    "updated": True,
+                },
+                status=200,
+            )
+
         defaults: Dict[str, Any] = {
             "name": view_name,
             "query_payload": structured_payload,
@@ -330,7 +381,7 @@ class QueryBuilderAdminMixin:
             defaults["created_by"] = request.user
 
         saved_view, created = View.objects.get_or_create(
-            model_label=self.get_saved_query_model_label(),
+            model_label=model_label,
             query_hash=query_hash,
             defaults=defaults,
         )
@@ -339,13 +390,14 @@ class QueryBuilderAdminMixin:
             "id": saved_view.pk,
             "queryHash": saved_view.query_hash,
             "created": created,
+            "updated": False,
         }
         return JsonResponse(response_payload, status=201 if created else 409)
 
     def _parse_save_query_request(
         self,
         request: HttpRequest,
-    ) -> Tuple[str, Dict[str, Any]]:
+    ) -> Tuple[str, Dict[str, Any], str, Optional[int]]:
         try:
             body = request.body.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -358,7 +410,7 @@ class QueryBuilderAdminMixin:
         if not isinstance(payload, dict):
             raise SyntaxError("Request body must be a JSON object.")
 
-        allowed_keys = {"name", "query"}
+        allowed_keys = {"name", "query", "mode", "viewId"}
         unknown_keys = sorted(set(payload.keys()) - allowed_keys)
         if unknown_keys:
             raise SyntaxError(f"Unexpected request keys: {', '.join(unknown_keys)}.")
@@ -372,7 +424,30 @@ class QueryBuilderAdminMixin:
         if not isinstance(raw_query, dict):
             raise SyntaxError("query is required and must be an object.")
 
-        return view_name, raw_query
+        raw_mode = payload.get("mode", "create")
+        if not isinstance(raw_mode, str):
+            raise SyntaxError("mode must be a string when provided.")
+        mode = raw_mode.strip().lower() or "create"
+        if mode not in {"create", "update"}:
+            raise SyntaxError("mode must be either 'create' or 'update'.")
+
+        raw_view_id = payload.get("viewId")
+        view_id: Optional[int] = None
+        if raw_view_id is not None:
+            if isinstance(raw_view_id, int):
+                view_id = raw_view_id
+            elif isinstance(raw_view_id, str) and raw_view_id.strip().isdigit():
+                view_id = int(raw_view_id.strip())
+            else:
+                raise SyntaxError("viewId must be an integer when provided.")
+
+            if view_id <= 0:
+                raise SyntaxError("viewId must be a positive integer.")
+
+        if mode == "update" and view_id is None:
+            raise SyntaxError("viewId is required when mode is 'update'.")
+
+        return view_name, raw_query, mode, view_id
 
     def _decode_structured_query(self, raw_query: str) -> Optional[Dict[str, Any]]:
         stripped = raw_query.strip()
