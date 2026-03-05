@@ -8,10 +8,12 @@ from django.contrib.admin.views.main import ChangeList
 from django.core.exceptions import FieldDoesNotExist, FieldError, SuspiciousOperation
 from django.db import DatabaseError, DataError, models
 from django.db.models import Avg, Count, Max, Min, Subquery, Sum, Value
-from django.http import HttpRequest
+from django.http import HttpRequest, HttpResponseNotAllowed, JsonResponse
 from django.template.response import TemplateResponse
+from django.urls import path
 
 from django_easy_query_builder.builders import QueryBuilder
+from django_easy_query_builder.models import View
 from django_easy_query_builder.parsers import (
     ALLOWED_DJANGO_OPERATORS,
     DJANGO_OPERATOR_SEQUENCE,
@@ -20,6 +22,7 @@ from django_easy_query_builder.parsers import (
     StructuredQueryParser,
 )
 from django_easy_query_builder.project_types import QueryBuilderModelAdminMixinProtocol
+from django_easy_query_builder.saved_views import build_query_hash
 from django_easy_query_builder.validators import QTreeValidator
 
 _FIELD_SEGMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -202,6 +205,18 @@ class QueryBuilderAdminMixin:
     ) -> type[ChangeList]:
         return self.QueryBuilderChangeList
 
+    def get_urls(self) -> List:
+        urls = super().get_urls()
+        model_info = (self.model._meta.app_label, self.model._meta.model_name)
+        custom_urls = [
+            path(
+                "save-query/",
+                self.admin_site.admin_view(self.save_query_view),
+                name=f"{model_info[0]}_{model_info[1]}_save_query",
+            )
+        ]
+        return custom_urls + urls
+
     @csrf_protect_m
     def changelist_view(
         self: QueryBuilderModelAdminMixinProtocol,
@@ -228,7 +243,136 @@ class QueryBuilderAdminMixin:
             "queryParam": self.advanced_query_param,
             "initialQuery": request.GET.get(self.advanced_query_param, ""),
             "enableTransforms": False,
+            "saveQueryUrl": self.get_save_query_url(request),
+            "savedQueryHashes": self.get_saved_query_hashes(),
+            "savedQueries": self.get_saved_queries(),
         }
+
+    def get_saved_query_model_label(self) -> str:
+        return self.model._meta.label_lower
+
+    def get_saved_query_hashes(self) -> List[str]:
+        try:
+            return list(
+                View.objects.filter(model_label=self.get_saved_query_model_label())
+                .order_by("query_hash")
+                .values_list("query_hash", flat=True)
+            )
+        except RuntimeError:
+            return []
+
+    def get_saved_queries(self) -> List[Dict[str, Any]]:
+        try:
+            return list(
+                View.objects.filter(model_label=self.get_saved_query_model_label())
+                .order_by("name", "id")
+                .values("id", "name", "query_hash", "query_payload")
+            )
+        except RuntimeError:
+            return []
+
+    def get_save_query_url(self, request: HttpRequest) -> str:
+        path_base = request.path if request.path.endswith("/") else f"{request.path}/"
+        return f"{path_base}save-query/"
+
+    @csrf_protect_m
+    def save_query_view(self, request: HttpRequest) -> JsonResponse:
+        if request.method != "POST":
+            return HttpResponseNotAllowed(["POST"])
+
+        if not self.has_view_or_change_permission(request):
+            return JsonResponse({"detail": "Permission denied."}, status=403)
+
+        try:
+            view_name, structured_payload = self._parse_save_query_request(request)
+            allowed_lookups = self.get_allowed_query_lookups()
+
+            transform_catalog, alias_definitions = self._collect_transform_catalog(
+                structured_payload
+            )
+            self._normalize_payload_value_alias_references(
+                structured_payload,
+                transform_catalog,
+            )
+            filter_tree = self._parse_advanced_query(
+                json.dumps(structured_payload),
+                structured_payload=structured_payload,
+                allowed_lookups=allowed_lookups,
+            )
+            validator = QTreeValidator(
+                sorted(set(self.get_allowed_query_fields())),
+                allowed_aliases=sorted(
+                    {definition["alias"] for definition in transform_catalog.values()}
+                ),
+                allowed_lookups=set(allowed_lookups),
+            )
+            validator.validate(filter_tree)
+        except (
+            ValueError,
+            SyntaxError,
+            json.JSONDecodeError,
+            FieldError,
+            DataError,
+            DatabaseError,
+            TypeError,
+        ) as exc:
+            return JsonResponse(
+                {"detail": f"Invalid advanced query payload: {exc}"},
+                status=400,
+            )
+
+        query_hash = build_query_hash(structured_payload)
+        defaults: Dict[str, Any] = {
+            "name": view_name,
+            "query_payload": structured_payload,
+        }
+        if request.user.is_authenticated:
+            defaults["created_by"] = request.user
+
+        saved_view, created = View.objects.get_or_create(
+            model_label=self.get_saved_query_model_label(),
+            query_hash=query_hash,
+            defaults=defaults,
+        )
+
+        response_payload = {
+            "id": saved_view.pk,
+            "queryHash": saved_view.query_hash,
+            "created": created,
+        }
+        return JsonResponse(response_payload, status=201 if created else 409)
+
+    def _parse_save_query_request(
+        self,
+        request: HttpRequest,
+    ) -> Tuple[str, Dict[str, Any]]:
+        try:
+            body = request.body.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise SyntaxError("Request body must be valid UTF-8 JSON.") from exc
+
+        if not body.strip():
+            raise SyntaxError("Request body cannot be empty.")
+
+        payload = json.loads(body)
+        if not isinstance(payload, dict):
+            raise SyntaxError("Request body must be a JSON object.")
+
+        allowed_keys = {"name", "query"}
+        unknown_keys = sorted(set(payload.keys()) - allowed_keys)
+        if unknown_keys:
+            raise SyntaxError(f"Unexpected request keys: {', '.join(unknown_keys)}.")
+
+        raw_name = payload.get("name")
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise SyntaxError("name is required and must be a non-empty string.")
+        view_name = raw_name.strip()
+
+        raw_query = payload.get("query")
+        if not isinstance(raw_query, dict):
+            raise SyntaxError("query is required and must be an object.")
+
+        return view_name, raw_query
 
     def _decode_structured_query(self, raw_query: str) -> Optional[Dict[str, Any]]:
         stripped = raw_query.strip()

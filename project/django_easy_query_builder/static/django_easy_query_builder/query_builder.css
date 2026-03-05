@@ -95,6 +95,11 @@
   flex-wrap: wrap;
 }
 
+.advanced-query-builder-admin .aqb-saved-views-select {
+  min-width: 180px;
+  flex: 0 1 260px;
+}
+
 .advanced-query-builder-admin .card-title {
   margin: 0;
   font-size: 1rem;
@@ -347,6 +352,11 @@
   background: var(--aqb-primary-hover);
 }
 
+.advanced-query-builder-admin .btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .advanced-query-builder-admin .btn-outline {
   background: var(--aqb-bg);
   color: var(--aqb-fg);
@@ -512,4 +522,47 @@
 .advanced-query-builder-admin .footer-note {
   color: var(--aqb-muted);
   text-align: center;
+}
+
+.advanced-query-builder-admin .aqb-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.advanced-query-builder-admin .aqb-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--aqb-fg) 30%, transparent);
+}
+
+.advanced-query-builder-admin .aqb-modal-dialog {
+  position: relative;
+  z-index: 1;
+  width: min(440px, calc(100vw - 2rem));
+  border-radius: 14px;
+}
+
+.advanced-query-builder-admin .aqb-modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.advanced-query-builder-admin .aqb-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+}
+
+.advanced-query-builder-admin .aqb-modal-error {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--aqb-danger);
 }

@@ -45,6 +45,34 @@ const ADVANCED_QUERY_PARAM = typeof BUILDER_CONFIG?.queryParam === "string" && B
 const INITIAL_QUERY_PAYLOAD = typeof BUILDER_CONFIG?.initialQuery === "string"
   ? BUILDER_CONFIG.initialQuery
   : "";
+const SAVE_QUERY_URL = typeof BUILDER_CONFIG?.saveQueryUrl === "string"
+  ? BUILDER_CONFIG.saveQueryUrl.trim()
+  : "";
+const INITIAL_SAVED_QUERY_HASHES = Array.isArray(BUILDER_CONFIG?.savedQueryHashes)
+  ? BUILDER_CONFIG.savedQueryHashes
+    .filter((item) => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+  : [];
+const INITIAL_SAVED_QUERIES = Array.isArray(BUILDER_CONFIG?.savedQueries)
+  ? BUILDER_CONFIG.savedQueries
+    .filter((item) => item && typeof item === "object")
+    .map((item) => ({
+      id: String(item.id ?? ""),
+      name: typeof item.name === "string" ? item.name.trim() : "",
+      queryHash: typeof item.query_hash === "string"
+        ? item.query_hash.trim()
+        : typeof item.queryHash === "string"
+        ? item.queryHash.trim()
+        : "",
+      query: item.query_payload && typeof item.query_payload === "object"
+        ? item.query_payload
+        : item.query && typeof item.query === "object"
+        ? item.query
+        : null,
+    }))
+    .filter((item) => item.id && item.name && item.query)
+  : [];
 
 const DJANGO_LOOKUPS = [
   "exact",
@@ -319,9 +347,26 @@ const readablePreview = document.getElementById("readable-preview");
 const djangoPreview = document.getElementById("django-preview");
 const previewWrapper = document.getElementById("preview-wrapper");
 const previewToggleButton = document.getElementById("preview-toggle");
+const savedQuerySelect = document.getElementById("advanced-query-view-select");
 const applyQueryButton = document.getElementById("advanced-query-apply");
+const saveQueryButton = document.getElementById("advanced-query-save");
 const clearQueryButton = document.getElementById("advanced-query-clear");
+const saveQueryModal = document.getElementById("save-query-modal");
+const saveQueryForm = document.getElementById("save-query-form");
+const saveQueryNameInput = document.getElementById("save-query-name");
+const saveQueryCancelButton = document.getElementById("save-query-cancel");
+const saveQueryConfirmButton = document.getElementById("save-query-confirm");
+const saveQueryError = document.getElementById("save-query-error");
 const PREVIEW_HIDDEN_CLASS = "is-hidden";
+const SAVED_QUERY_HASHES = new Set(INITIAL_SAVED_QUERY_HASHES);
+const SAVED_QUERY_MAP = new Map(
+  INITIAL_SAVED_QUERIES.map((item) => [item.id, item])
+);
+const VOLATILE_QUERY_KEYS = new Set(["id", "fieldRef", "valueRef"]);
+const VOLATILE_TRANSFORM_KEYS = new Set(["id"]);
+const FNV_OFFSET_BASIS_64 = 1469598103934665603n;
+const FNV_PRIME_64 = 1099511628211n;
+const UINT64_MASK = (1n << 64n) - 1n;
 
 let latestDerivedTransformState = null;
 
@@ -872,6 +917,224 @@ function serializeGroup(group) {
   };
 }
 
+function canonicalizeQueryPayload(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeQueryPayload(item));
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const isTransformObject = Object.prototype.hasOwnProperty.call(value, "value")
+    && Object.prototype.hasOwnProperty.call(value, "id")
+    && Object.keys(value).length <= 2;
+
+  const volatileKeys = isTransformObject ? VOLATILE_TRANSFORM_KEYS : VOLATILE_QUERY_KEYS;
+  const cleaned = {};
+  const keys = Object.keys(value).sort();
+
+  keys.forEach((key) => {
+    if (volatileKeys.has(key)) return;
+    cleaned[key] = canonicalizeQueryPayload(value[key]);
+  });
+  return cleaned;
+}
+
+function stableStringify(value) {
+  return JSON.stringify(value);
+}
+
+function hashStringFNV1A64(value) {
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(value);
+  let hash = FNV_OFFSET_BASIS_64;
+
+  bytes.forEach((byte) => {
+    hash ^= BigInt(byte);
+    hash = (hash * FNV_PRIME_64) & UINT64_MASK;
+  });
+
+  return hash.toString(16).padStart(16, "0");
+}
+
+function computeQueryHash(payload) {
+  const canonicalPayload = canonicalizeQueryPayload(payload);
+  return hashStringFNV1A64(stableStringify(canonicalPayload));
+}
+
+function setSaveQueryError(message = "") {
+  if (!saveQueryError) return;
+  const normalized = normalizeValueItem(message);
+  if (!normalized) {
+    saveQueryError.textContent = "";
+    saveQueryError.classList.add(PREVIEW_HIDDEN_CLASS);
+    return;
+  }
+  saveQueryError.textContent = normalized;
+  saveQueryError.classList.remove(PREVIEW_HIDDEN_CLASS);
+}
+
+function closeSaveQueryModal() {
+  if (!saveQueryModal) return;
+  saveQueryModal.classList.add(PREVIEW_HIDDEN_CLASS);
+  saveQueryModal.setAttribute("aria-hidden", "true");
+  setSaveQueryError("");
+}
+
+function openSaveQueryModal() {
+  if (!saveQueryModal || !saveQueryNameInput) return;
+  setSaveQueryError("");
+  saveQueryNameInput.value = "";
+  saveQueryModal.classList.remove(PREVIEW_HIDDEN_CLASS);
+  saveQueryModal.setAttribute("aria-hidden", "false");
+  saveQueryNameInput.focus();
+}
+
+function getCookie(name) {
+  const encodedName = `${name}=`;
+  const cookies = document.cookie.split(";");
+  for (let idx = 0; idx < cookies.length; idx += 1) {
+    const cookie = cookies[idx].trim();
+    if (cookie.startsWith(encodedName)) {
+      return decodeURIComponent(cookie.slice(encodedName.length));
+    }
+  }
+  return "";
+}
+
+function updateSaveQueryAvailability() {
+  if (!saveQueryButton) return;
+  if (!SAVE_QUERY_URL) {
+    saveQueryButton.disabled = true;
+    saveQueryButton.title = "Saving queries is unavailable.";
+    return;
+  }
+
+  const payload = serializeGroup(queryState);
+  const queryHash = computeQueryHash(payload);
+  const alreadySaved = SAVED_QUERY_HASHES.has(queryHash);
+  saveQueryButton.disabled = alreadySaved;
+  saveQueryButton.title = alreadySaved
+    ? "This query is already saved."
+    : "Save current query as a view.";
+}
+
+async function saveCurrentQueryView(event) {
+  event.preventDefault();
+  if (!SAVE_QUERY_URL || !saveQueryNameInput) return;
+
+  const viewName = normalizeValueItem(saveQueryNameInput.value);
+  if (!viewName) {
+    setSaveQueryError("Please enter a view name.");
+    saveQueryNameInput.focus();
+    return;
+  }
+
+  const payload = serializeGroup(queryState);
+  const queryHash = computeQueryHash(payload);
+
+  if (SAVED_QUERY_HASHES.has(queryHash)) {
+    setSaveQueryError("This query is already saved.");
+    updateSaveQueryAvailability();
+    return;
+  }
+
+  if (saveQueryConfirmButton) {
+    saveQueryConfirmButton.disabled = true;
+  }
+  setSaveQueryError("");
+
+  try {
+    const response = await fetch(SAVE_QUERY_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": getCookie("csrftoken"),
+      },
+      body: JSON.stringify({
+        name: viewName,
+        query: payload,
+      }),
+    });
+
+    let responsePayload = {};
+    try {
+      responsePayload = await response.json();
+    } catch (_error) {
+      responsePayload = {};
+    }
+
+    if (response.status === 201 || response.status === 409) {
+      const savedHash = normalizeValueItem(responsePayload.queryHash) || queryHash;
+      if (savedHash) {
+        SAVED_QUERY_HASHES.add(savedHash);
+      }
+      const savedId = normalizeValueItem(responsePayload.id);
+      if (savedId) {
+        SAVED_QUERY_MAP.set(savedId, {
+          id: savedId,
+          name: viewName,
+          queryHash: savedHash,
+          query: payload,
+        });
+        initializeSavedQuerySelect();
+      }
+      closeSaveQueryModal();
+      updateSaveQueryAvailability();
+      return;
+    }
+
+    const errorMessage = normalizeValueItem(responsePayload.detail)
+      || "Unable to save this query view.";
+    setSaveQueryError(errorMessage);
+  } catch (_error) {
+    setSaveQueryError("Unable to save this query view.");
+  } finally {
+    if (saveQueryConfirmButton) {
+      saveQueryConfirmButton.disabled = false;
+    }
+  }
+}
+
+function initializeSavedQuerySelect() {
+  if (!savedQuerySelect) return;
+
+  savedQuerySelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Saved views";
+  savedQuerySelect.appendChild(placeholder);
+
+  if (SAVED_QUERY_MAP.size === 0) {
+    savedQuerySelect.disabled = true;
+    return;
+  }
+
+  savedQuerySelect.disabled = false;
+  Array.from(SAVED_QUERY_MAP.values())
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .forEach((savedQuery) => {
+      const option = document.createElement("option");
+      option.value = savedQuery.id;
+      option.textContent = savedQuery.name;
+      savedQuerySelect.appendChild(option);
+    });
+
+  savedQuerySelect.addEventListener("change", () => {
+    const selectedId = savedQuerySelect.value;
+    if (!selectedId) return;
+    const savedQuery = SAVED_QUERY_MAP.get(selectedId);
+    if (!savedQuery || !savedQuery.query) return;
+
+    const params = new URLSearchParams(window.location.search);
+    params.set(ADVANCED_QUERY_PARAM, JSON.stringify(savedQuery.query));
+    params.delete("p");
+    const search = params.toString();
+    window.location.search = search ? `?${search}` : window.location.pathname;
+  });
+}
+
 function applyAdvancedQuery() {
   const payload = serializeGroup(queryState);
   const params = new URLSearchParams(window.location.search);
@@ -901,11 +1164,42 @@ function clearAdvancedQuery() {
 }
 
 function initializeAdminActions() {
+  initializeSavedQuerySelect();
+
   if (applyQueryButton) {
     applyQueryButton.addEventListener("click", applyAdvancedQuery);
   }
+  if (saveQueryButton) {
+    saveQueryButton.addEventListener("click", () => {
+      updateSaveQueryAvailability();
+      if (saveQueryButton.disabled) {
+        return;
+      }
+      openSaveQueryModal();
+    });
+  }
   if (clearQueryButton) {
     clearQueryButton.addEventListener("click", clearAdvancedQuery);
+  }
+
+  if (saveQueryCancelButton) {
+    saveQueryCancelButton.addEventListener("click", closeSaveQueryModal);
+  }
+
+  if (saveQueryModal) {
+    saveQueryModal.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      if (target.hasAttribute("data-modal-close")) {
+        closeSaveQueryModal();
+      }
+    });
+  }
+
+  if (saveQueryForm) {
+    saveQueryForm.addEventListener("submit", saveCurrentQueryView);
   }
 }
 
@@ -915,6 +1209,7 @@ function renderApp() {
   queryRoot.innerHTML = "";
   queryRoot.appendChild(renderGroup(queryState, true));
   updatePreview(derived);
+  updateSaveQueryAvailability();
 }
 
 function renderGroup(group, isRoot = false, level = 0, onRemove) {
@@ -2115,6 +2410,8 @@ if (typeof module !== "undefined" && module.exports) {
     queryState,
     makeAlias,
     toDjangoPath,
+    canonicalizeQueryPayload,
+    computeQueryHash,
   };
 }
 

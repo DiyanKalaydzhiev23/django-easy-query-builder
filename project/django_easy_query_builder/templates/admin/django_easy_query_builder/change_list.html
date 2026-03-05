@@ -20,7 +20,11 @@
         <div class="card-header">
           <div class="card-header-top">
             <div class="aqb-header-actions">
+              <select id="advanced-query-view-select" class="aqb-saved-views-select" aria-label="Saved query views">
+                <option value="">Saved views</option>
+              </select>
               <button id="advanced-query-apply" class="btn btn-sm" type="button">Apply Query</button>
+              <button id="advanced-query-save" class="btn btn-outline btn-sm" type="button">Save Query</button>
               <button id="advanced-query-clear" class="btn btn-outline btn-sm" type="button">Clear Query</button>
               <button
                 id="preview-toggle"
@@ -58,6 +62,24 @@ query = Q()</pre>
           </div>
         </div>
       </section>
+    </div>
+  </div>
+
+  <div id="save-query-modal" class="aqb-modal is-hidden" aria-hidden="true">
+    <div class="aqb-modal-backdrop" data-modal-close></div>
+    <div class="aqb-modal-dialog card" role="dialog" aria-modal="true" aria-labelledby="save-query-modal-title">
+      <div class="card-header">
+        <h3 id="save-query-modal-title" class="card-title">Save Query View</h3>
+        <p class="card-description">Give this query a name so you can reuse it later.</p>
+      </div>
+      <form id="save-query-form" class="card-content aqb-modal-form">
+        <input id="save-query-name" type="text" maxlength="120" placeholder="View name" required>
+        <p id="save-query-error" class="aqb-modal-error is-hidden"></p>
+        <div class="aqb-modal-actions">
+          <button id="save-query-cancel" class="btn btn-outline btn-sm" type="button">Cancel</button>
+          <button id="save-query-confirm" class="btn btn-sm" type="submit">Save</button>
+        </div>
+      </form>
     </div>
   </div>
 </div>
