@@ -8,10 +8,12 @@ version = "0.1.0"
 description = "Advanced query builder UI for Django admin changelists."
 readme = "README.md"
 requires-python = ">=3.10"
+license = { file = "LICENSE" }
 dependencies = [
   "Django>=4.2",
 ]
 classifiers = [
+  "License :: OSI Approved :: MIT License",
   "Framework :: Django",
   "Framework :: Django :: 4.2",
   "Framework :: Django :: 5.0",

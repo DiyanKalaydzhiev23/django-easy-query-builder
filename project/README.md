@@ -193,4 +193,4 @@ pre-commit install
 
 ## License
 
-Add your preferred license file (`LICENSE`) before publishing publicly.
+MIT. See [LICENSE](LICENSE).
