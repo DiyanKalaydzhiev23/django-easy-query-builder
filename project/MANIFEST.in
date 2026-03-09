@@ -1,0 +1,3 @@
+include README.md
+recursive-include django_easy_query_builder/templates *.html
+recursive-include django_easy_query_builder/static *

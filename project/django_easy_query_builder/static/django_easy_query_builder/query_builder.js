@@ -45,6 +45,9 @@ const ADVANCED_QUERY_PARAM = typeof BUILDER_CONFIG?.queryParam === "string" && B
 const INITIAL_QUERY_PAYLOAD = typeof BUILDER_CONFIG?.initialQuery === "string"
   ? BUILDER_CONFIG.initialQuery
   : "";
+const SAVED_VIEW_PARAM = typeof BUILDER_CONFIG?.savedViewParam === "string" && BUILDER_CONFIG.savedViewParam.trim()
+  ? BUILDER_CONFIG.savedViewParam.trim()
+  : "saved_view";
 const SAVE_QUERY_URL = typeof BUILDER_CONFIG?.saveQueryUrl === "string"
   ? BUILDER_CONFIG.saveQueryUrl.trim()
   : "";
@@ -64,6 +67,21 @@ const INITIAL_SAVED_QUERIES = Array.isArray(BUILDER_CONFIG?.savedQueries)
         ? item.query_hash.trim()
         : typeof item.queryHash === "string"
         ? item.queryHash.trim()
+        : "",
+      usageCount: Number.isFinite(Number(item.usage_count))
+        ? Number(item.usage_count)
+        : Number.isFinite(Number(item.usageCount))
+        ? Number(item.usageCount)
+        : 0,
+      lastUsedAt: typeof item.last_used_at === "string"
+        ? item.last_used_at
+        : typeof item.lastUsedAt === "string"
+        ? item.lastUsedAt
+        : "",
+      createdBy: typeof item.created_by === "string"
+        ? item.created_by
+        : typeof item.createdBy === "string"
+        ? item.createdBy
         : "",
       query: item.query_payload && typeof item.query_payload === "object"
         ? item.query_payload
@@ -1163,10 +1181,14 @@ async function saveCurrentQueryView(mode) {
       const savedHash = normalizeValueItem(responsePayload.queryHash);
       const savedId = normalizeValueItem(responsePayload.id || activeSavedQuery?.id);
       if (savedId && (response.status === 201 || response.status === 200)) {
+        const existing = SAVED_QUERY_MAP.get(savedId);
         SAVED_QUERY_MAP.set(savedId, {
           id: savedId,
           name: viewName,
           queryHash: savedHash,
+          usageCount: Number(existing?.usageCount || 0),
+          lastUsedAt: existing?.lastUsedAt || "",
+          createdBy: existing?.createdBy || "",
           query: payload,
         });
         rebuildSavedQueryHashes();
@@ -1215,7 +1237,21 @@ function initializeSavedQuerySelect() {
 
   savedQuerySelect.disabled = false;
   Array.from(SAVED_QUERY_MAP.values())
-    .sort((left, right) => left.name.localeCompare(right.name))
+    .sort((left, right) => {
+      const leftLastUsed = Date.parse(left.lastUsedAt || "") || 0;
+      const rightLastUsed = Date.parse(right.lastUsedAt || "") || 0;
+      if (leftLastUsed !== rightLastUsed) {
+        return rightLastUsed - leftLastUsed;
+      }
+
+      const leftUsageCount = Number(left.usageCount || 0);
+      const rightUsageCount = Number(right.usageCount || 0);
+      if (leftUsageCount !== rightUsageCount) {
+        return rightUsageCount - leftUsageCount;
+      }
+
+      return left.name.localeCompare(right.name);
+    })
     .forEach((savedQuery) => {
       const option = document.createElement("option");
       option.value = savedQuery.id;
@@ -1236,6 +1272,7 @@ function initializeSavedQuerySelect() {
     activeSavedQueryId = selectedId;
     const params = new URLSearchParams(window.location.search);
     params.set(ADVANCED_QUERY_PARAM, JSON.stringify(savedQuery.query));
+    params.set(SAVED_VIEW_PARAM, selectedId);
     params.delete("p");
     const search = params.toString();
     window.location.search = search ? `?${search}` : window.location.pathname;
@@ -1250,6 +1287,7 @@ function applyAdvancedQuery() {
   const payload = serializeGroup(queryState);
   const params = new URLSearchParams(window.location.search);
   params.set(ADVANCED_QUERY_PARAM, JSON.stringify(payload));
+  params.delete(SAVED_VIEW_PARAM);
   params.delete("p");
   const search = params.toString();
   if (search) {
@@ -1265,6 +1303,7 @@ function clearAdvancedQuery() {
     return;
   }
   params.delete(ADVANCED_QUERY_PARAM);
+  params.delete(SAVED_VIEW_PARAM);
   params.delete("p");
   const search = params.toString();
   if (search) {

@@ -9,6 +9,8 @@ class View(models.Model):
     model_label = models.CharField(max_length=255, db_index=True)
     query_payload = models.JSONField()
     query_hash = models.CharField(max_length=64, db_index=True)
+    last_used_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    usage_count = models.PositiveIntegerField(default=0)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,

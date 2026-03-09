@@ -3,13 +3,13 @@
 
 {% block extrastyle %}
 {{ block.super }}
-<link rel="stylesheet" href="{% static 'django_easy_query_builder/query_builder.css' %}">
+<link rel="stylesheet" href="{% static 'django_easy_query_builder/query_builder.css' %}?v=20260309">
 {% endblock %}
 
 {% block extrahead %}
 {{ block.super }}
 {{ query_builder_frontend_config|json_script:"advanced-query-builder-config" }}
-<script src="{% static 'django_easy_query_builder/query_builder.js' %}" defer></script>
+<script src="{% static 'django_easy_query_builder/query_builder.js' %}?v=20260309" defer></script>
 {% endblock %}
 
 {% block search %}

@@ -1,7 +1,9 @@
 import json
+from datetime import timedelta
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 
 from django_easy_query_builder.models import View
 from django_easy_query_builder.saved_views import build_query_hash
@@ -101,6 +103,63 @@ def test_changelist_frontend_config_contains_saved_query_hashes(admin_client) ->
     assert len(config["savedQueries"]) == 1
     assert config["savedQueries"][0]["name"] == "Maria"
     assert config["savedQueries"][0]["query_payload"] == payload
+    assert config["savedQueries"][0]["usage_count"] == 0
+    assert config["savedQueries"][0]["last_used_at"] is None
+    assert config["savedQueries"][0]["created_by"] is None
+
+
+@pytest.mark.django_db
+def test_saved_queries_sorted_by_usage_metadata(admin_client) -> None:
+    older_payload = _first_name_equals_payload("Maria", suffix="older")
+    newer_payload = _first_name_equals_payload("Ivan", suffix="newer")
+
+    View.objects.create(
+        name="Older",
+        model_label="examples.person",
+        query_hash=build_query_hash(older_payload),
+        query_payload=older_payload,
+        usage_count=9,
+        last_used_at=timezone.now() - timedelta(days=2),
+    )
+    View.objects.create(
+        name="Newer",
+        model_label="examples.person",
+        query_hash=build_query_hash(newer_payload),
+        query_payload=newer_payload,
+        usage_count=1,
+        last_used_at=timezone.now() - timedelta(hours=1),
+    )
+
+    response = admin_client.get("/admin/examples/person/")
+    assert response.status_code == 200
+    saved_queries = response.context["query_builder_frontend_config"]["savedQueries"]
+
+    assert [item["name"] for item in saved_queries] == ["Newer", "Older"]
+
+
+@pytest.mark.django_db
+def test_saved_view_usage_is_tracked_when_selected(admin_client) -> None:
+    payload = _first_name_equals_payload("Maria")
+    saved = View.objects.create(
+        name="Maria",
+        model_label="examples.person",
+        query_hash=build_query_hash(payload),
+        query_payload=payload,
+        usage_count=0,
+    )
+
+    response = admin_client.get(
+        "/admin/examples/person/",
+        {
+            "advanced_query": json.dumps(payload),
+            "saved_view": str(saved.id),
+        },
+    )
+    assert response.status_code == 200
+
+    saved.refresh_from_db()
+    assert saved.usage_count == 1
+    assert saved.last_used_at is not None
 
 
 @pytest.mark.django_db

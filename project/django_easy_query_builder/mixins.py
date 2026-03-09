@@ -11,6 +11,7 @@ from django.db.models import Avg, Count, Max, Min, Subquery, Sum, Value
 from django.http import HttpRequest, HttpResponseNotAllowed, JsonResponse
 from django.template.response import TemplateResponse
 from django.urls import path
+from django.utils import timezone
 
 from django_easy_query_builder.builders import QueryBuilder
 from django_easy_query_builder.models import View
@@ -34,6 +35,7 @@ class QueryBuilderAdminMixin:
     advanced_search_fields: List[str] = []
     advanced_search_lookups: List[str] = ["__all__"]
     advanced_query_param: str = "advanced_query"
+    saved_view_param: str = "saved_view"
     change_list_template: str = "admin/django_easy_query_builder/change_list.html"
     _TRANSFORM_ANNOTATIONS = {
         "count": Count,
@@ -54,6 +56,12 @@ class QueryBuilderAdminMixin:
                 "advanced_query",
             )
             lookup_params.pop(advanced_query_param, None)
+            saved_view_param = getattr(
+                self.model_admin,
+                "saved_view_param",
+                "saved_view",
+            )
+            lookup_params.pop(saved_view_param, None)
             return lookup_params
 
     def get_allowed_query_fields(self) -> List[str]:
@@ -224,6 +232,7 @@ class QueryBuilderAdminMixin:
         extra_context: Optional[dict] = None,
     ) -> TemplateResponse:
         request._advanced_query_suppress_errors = True
+        self._mark_saved_view_usage(request)
         if extra_context is None:
             extra_context = {}
 
@@ -246,6 +255,7 @@ class QueryBuilderAdminMixin:
             "saveQueryUrl": self.get_save_query_url(request),
             "savedQueryHashes": self.get_saved_query_hashes(),
             "savedQueries": self.get_saved_queries(),
+            "savedViewParam": self.saved_view_param,
         }
 
     def get_saved_query_model_label(self) -> str:
@@ -263,13 +273,70 @@ class QueryBuilderAdminMixin:
 
     def get_saved_queries(self) -> List[Dict[str, Any]]:
         try:
-            return list(
+            queryset = (
                 View.objects.filter(model_label=self.get_saved_query_model_label())
-                .order_by("name", "id")
-                .values("id", "name", "query_hash", "query_payload")
+                .select_related("created_by")
+                .order_by("-last_used_at", "-usage_count", "name", "id")
             )
+            return [
+                {
+                    "id": saved_view.pk,
+                    "name": saved_view.name,
+                    "query_hash": saved_view.query_hash,
+                    "query_payload": saved_view.query_payload,
+                    "created_by": (
+                        saved_view.created_by.get_username()
+                        if saved_view.created_by is not None
+                        else None
+                    ),
+                    "last_used_at": (
+                        saved_view.last_used_at.isoformat()
+                        if saved_view.last_used_at is not None
+                        else None
+                    ),
+                    "usage_count": saved_view.usage_count,
+                }
+                for saved_view in queryset
+            ]
         except RuntimeError:
             return []
+
+    def _mark_saved_view_usage(self, request: HttpRequest) -> None:
+        raw_saved_view_id = request.GET.get(self.saved_view_param)
+        if not raw_saved_view_id:
+            return
+        if not raw_saved_view_id.strip().isdigit():
+            return
+
+        saved_view = (
+            View.objects.filter(
+                model_label=self.get_saved_query_model_label(),
+                pk=int(raw_saved_view_id.strip()),
+            )
+            .only("id", "query_hash", "query_payload")
+            .first()
+        )
+        if saved_view is None:
+            return
+
+        raw_query = request.GET.get(self.advanced_query_param, "")
+        if not raw_query.strip():
+            return
+
+        try:
+            payload = self._decode_structured_query(raw_query)
+        except (ValueError, SyntaxError, json.JSONDecodeError, TypeError):
+            return
+        if payload is None:
+            return
+
+        if build_query_hash(payload) != saved_view.query_hash:
+            return
+
+        View.objects.filter(pk=saved_view.pk).update(
+            last_used_at=timezone.now(),
+            usage_count=models.F("usage_count") + 1,
+        )
 
     def get_save_query_url(self, request: HttpRequest) -> str:
         path_base = request.path if request.path.endswith("/") else f"{request.path}/"

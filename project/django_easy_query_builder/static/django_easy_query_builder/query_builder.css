@@ -92,12 +92,21 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding-right: 0.5rem;
 }
 
 .advanced-query-builder-admin .aqb-saved-views-select {
-  min-width: 180px;
-  flex: 0 1 260px;
+  min-width: 150px;
+  flex: 0 0 220px;
+  max-width: 220px;
+}
+
+.advanced-query-builder-admin .aqb-header-actions .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .advanced-query-builder-admin .card-title {
@@ -155,6 +164,10 @@
   color: var(--aqb-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.preview-heading {
+  padding-bottom: 5px;
 }
 
 .advanced-query-builder-admin .code-block {
