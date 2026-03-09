@@ -28,27 +28,20 @@ This package provides that out of the box with a mixin.
 - Saved query views in admin UI
 - Backend-first test coverage
 
-## Screenshots (Placeholders)
-
-Replace these placeholders with your real screenshots.
-
 ### Query Builder Panel
 
 ![Query Builder Panel Placeholder](https://res.cloudinary.com/dhqp5qtsw/image/upload/v1773085620/01-query-builder-panel_wax7zj.png)
 
-_Placeholder: main changelist page with query builder UI._
 
 ### Nested Group Example
 
 ![Nested Group Placeholder](https://res.cloudinary.com/dhqp5qtsw/image/upload/v1773085620/02-nested-groups_fuhg0c.png)
 
-_Placeholder: example with nested `AND` / `OR` groups and relation filters._
 
 ### Saved Views Dropdown
 
 ![Saved Views Placeholder](https://res.cloudinary.com/dhqp5qtsw/image/upload/v1773085620/03-saved-views_yne8v0.png)
 
-_Placeholder: saved query selection and apply flow._
 
 ## Installation
 
