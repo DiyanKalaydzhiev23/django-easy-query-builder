@@ -92,10 +92,9 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  scrollbar-width: thin;
-  padding-right: 0.5rem;
+  flex-wrap: wrap;
+  overflow-x: visible;
+  padding-right: 0;
 }
 
 .advanced-query-builder-admin .aqb-saved-views-select {
@@ -107,6 +106,17 @@
 .advanced-query-builder-admin .aqb-header-actions .btn {
   flex: 0 0 auto;
   white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .advanced-query-builder-admin .aqb-saved-views-select {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  .advanced-query-builder-admin #preview-toggle {
+    flex: 1 0 100%;
+  }
 }
 
 .advanced-query-builder-admin .card-title {

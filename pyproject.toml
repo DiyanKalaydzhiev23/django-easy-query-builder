@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 license = { file = "LICENSE" }
 dependencies = [
   "Django>=4.2",
+  "psycopg2-binary (>=2.9.11,<3.0.0)",
 ]
 classifiers = [
   "License :: OSI Approved :: MIT License",
