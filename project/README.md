@@ -50,12 +50,6 @@ _Placeholder: example with nested `AND` / `OR` groups and relation filters._
 
 _Placeholder: saved query selection and apply flow._
 
-### Query Preview
-
-![Query Preview Placeholder](docs/screenshots/04-query-preview.png)
-
-_Placeholder: readable query + generated Django ORM preview._
-
 ## Installation
 
 Install with whichever tool you use:
