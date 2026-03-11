@@ -218,10 +218,54 @@ function resolveOperatorSpec(rawOperator) {
   return { lookup: "exact", negated: false };
 }
 
+function dedupeOperatorOptions(options) {
+  const dedupedBySpec = new Map();
+
+  options.forEach((option) => {
+    const spec = resolveOperatorSpec(option.value);
+    const key = `${spec.lookup}:${spec.negated ? "1" : "0"}`;
+    const existing = dedupedBySpec.get(key);
+    if (!existing) {
+      dedupedBySpec.set(key, option);
+      return;
+    }
+
+    const currentIsDunder = option.value.startsWith("__");
+    const existingIsDunder = existing.value.startsWith("__");
+    if (!currentIsDunder && existingIsDunder) {
+      dedupedBySpec.set(key, option);
+    }
+  });
+
+  return Array.from(dedupedBySpec.values());
+}
+
+function resolveOperatorValueForAvailableOptions(rawOperator, availableOptions) {
+  const options = Array.isArray(availableOptions) && availableOptions.length > 0
+    ? availableOptions
+    : OPERATOR_OPTIONS;
+
+  const operatorValue = typeof rawOperator === "string" ? rawOperator.trim() : "";
+  if (operatorValue && options.some((option) => option.value === operatorValue)) {
+    return operatorValue;
+  }
+
+  const wantedSpec = resolveOperatorSpec(operatorValue);
+  const canonicalOption = options.find((option) => {
+    const optionSpec = resolveOperatorSpec(option.value);
+    return optionSpec.lookup === wantedSpec.lookup && optionSpec.negated === wantedSpec.negated;
+  });
+  if (canonicalOption) {
+    return canonicalOption.value;
+  }
+
+  return options[0]?.value || "equals";
+}
+
 function resolveAvailableOperatorOptions(config) {
   const configured = config?.availableLookups;
   if (!Array.isArray(configured) || configured.length === 0) {
-    return [...OPERATOR_OPTIONS];
+    return dedupeOperatorOptions(OPERATOR_OPTIONS);
   }
 
   const allowedLookups = new Set();
@@ -245,12 +289,13 @@ function resolveAvailableOperatorOptions(config) {
   });
 
   if (allowedLookups.size === 0) {
-    return [...OPERATOR_OPTIONS];
+    return dedupeOperatorOptions(OPERATOR_OPTIONS);
   }
 
-  return OPERATOR_OPTIONS.filter((option) =>
+  const filteredOptions = OPERATOR_OPTIONS.filter((option) =>
     allowedLookups.has(resolveOperatorSpec(option.value).lookup)
   );
+  return dedupeOperatorOptions(filteredOptions);
 }
 
 const AVAILABLE_OPERATOR_OPTIONS = resolveAvailableOperatorOptions(BUILDER_CONFIG);
@@ -755,9 +800,11 @@ function hydrateCondition(condition) {
     normalized.field = condition.field;
   }
   if (typeof condition.operator === "string") {
-    normalized.operator = condition.operator;
-  }
-  if (!AVAILABLE_OPERATOR_OPTIONS.some((option) => option.value === normalized.operator)) {
+    normalized.operator = resolveOperatorValueForAvailableOptions(
+      condition.operator,
+      AVAILABLE_OPERATOR_OPTIONS
+    );
+  } else {
     normalized.operator = AVAILABLE_OPERATOR_OPTIONS[0]?.value || "equals";
   }
   if (Array.isArray(condition.value)) {
