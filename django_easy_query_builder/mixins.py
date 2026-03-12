@@ -244,10 +244,15 @@ class QueryBuilderAdminMixin:
         return super().changelist_view(request, extra_context=extra_context)
 
     def get_query_builder_frontend_config(self, request: HttpRequest) -> Dict[str, Any]:
+        fields_mapping = self.get_query_builder_fields_mapping()
         return {
-            "availableFields": [
-                item["name"] for item in self.get_query_builder_fields_mapping()
-            ],
+            "availableFields": [item["name"] for item in fields_mapping],
+            "availableFieldTypes": {
+                item["name"]: item["type"]
+                for item in fields_mapping
+                if isinstance(item.get("name"), str)
+                and isinstance(item.get("type"), str)
+            },
             "availableLookups": self.get_allowed_query_lookups(),
             "queryParam": self.advanced_query_param,
             "initialQuery": request.GET.get(self.advanced_query_param, ""),

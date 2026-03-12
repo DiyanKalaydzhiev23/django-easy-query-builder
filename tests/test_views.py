@@ -50,9 +50,26 @@ def test_get_query_builder_frontend_config(admin_instance):
 
     assert config["queryParam"] == "advanced_query"
     assert "first_name" in config["availableFields"]
+    assert config["availableFieldTypes"]["first_name"] == "CharField"
+    assert config["availableFieldTypes"]["date_of_birth"] == "DateField"
+    assert config["availableFieldTypes"]["email"] == "EmailField"
     assert config["availableLookups"] == list(DJANGO_OPERATOR_SEQUENCE)
     assert config["initialQuery"].startswith("{")
     assert config["enableTransforms"] is False
+
+
+def test_get_query_builder_frontend_config_includes_nested_field_types():
+    class TestAdmin(QueryBuilderAdminMixin, admin.ModelAdmin):
+        model = Person
+        query_builder_fields = ["age", "cars__is_electric", "cars__year"]
+
+    admin_instance = TestAdmin(Person, admin.site)
+    request = RequestFactory().get("/admin/examples/person/")
+    config = admin_instance.get_query_builder_frontend_config(request)
+
+    assert config["availableFieldTypes"]["age"] == "IntegerField"
+    assert config["availableFieldTypes"]["cars.is_electric"] == "BooleanField"
+    assert config["availableFieldTypes"]["cars.year"] == "IntegerField"
 
 
 def test_admin_lookup_configuration_override_is_exposed_to_frontend():

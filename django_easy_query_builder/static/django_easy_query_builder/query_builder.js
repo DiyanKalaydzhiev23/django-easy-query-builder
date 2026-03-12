@@ -39,6 +39,48 @@ function resolveAvailableFields(config) {
 }
 
 const AVAILABLE_FIELDS = resolveAvailableFields(BUILDER_CONFIG);
+
+function resolveAvailableFieldTypes(config) {
+  const configured = config?.availableFieldTypes;
+  if (!configured || typeof configured !== "object" || Array.isArray(configured)) {
+    return {};
+  }
+
+  const cleaned = {};
+  Object.entries(configured).forEach(([rawField, rawType]) => {
+    if (typeof rawField !== "string" || typeof rawType !== "string") {
+      return;
+    }
+    const field = rawField.trim();
+    const typeName = rawType.trim();
+    if (!field || !typeName) {
+      return;
+    }
+    cleaned[field] = typeName;
+  });
+
+  return cleaned;
+}
+
+const AVAILABLE_FIELD_TYPES = resolveAvailableFieldTypes(BUILDER_CONFIG);
+const BOOLEAN_FIELD_TYPES = new Set(["BooleanField", "NullBooleanField"]);
+const DATE_FIELD_TYPES = new Set(["DateField", "DateTimeField"]);
+const NUMERIC_FIELD_TYPES = new Set([
+  "AutoField",
+  "BigAutoField",
+  "BigIntegerField",
+  "DecimalField",
+  "DurationField",
+  "FloatField",
+  "IntegerField",
+  "PositiveBigIntegerField",
+  "PositiveIntegerField",
+  "PositiveSmallIntegerField",
+  "SmallAutoField",
+  "SmallIntegerField",
+]);
+const BOOLEAN_NULL_OPTION = "__aqb_null__";
+
 const ADVANCED_QUERY_PARAM = typeof BUILDER_CONFIG?.queryParam === "string" && BUILDER_CONFIG.queryParam.trim()
   ? BUILDER_CONFIG.queryParam.trim()
   : "advanced_query";
@@ -339,6 +381,121 @@ function getConditionScalarValue(condition) {
 function getConditionRangeValues(condition) {
   const values = toValueList(condition.value, true);
   return [values[0] || "", values[1] || ""];
+}
+
+function getConfiguredFieldType(field) {
+  const fieldName = normalizeValueItem(field);
+  if (!fieldName) {
+    return "";
+  }
+
+  const exact = AVAILABLE_FIELD_TYPES[fieldName];
+  if (typeof exact === "string" && exact) {
+    return exact;
+  }
+
+  const dotted = fieldName.replace(/__/g, ".");
+  const dottedType = AVAILABLE_FIELD_TYPES[dotted];
+  if (typeof dottedType === "string" && dottedType) {
+    return dottedType;
+  }
+
+  return "";
+}
+
+function getConditionFieldType(condition, fieldOptions) {
+  if (condition?.fieldRef?.type === "alias") {
+    return "";
+  }
+
+  const selectedOption = Array.isArray(fieldOptions)
+    ? fieldOptions.find((option) => option.value === condition.field)
+    : null;
+  if (selectedOption?.type === "alias") {
+    return "";
+  }
+
+  return getConfiguredFieldType(condition?.field);
+}
+
+function resolveScalarInputKind(fieldType, lookup) {
+  if (BOOLEAN_FIELD_TYPES.has(fieldType)) {
+    return "boolean";
+  }
+
+  if (DATE_FIELD_TYPES.has(fieldType)) {
+    if (lookup === "year" || lookup === "month") {
+      return "number";
+    }
+    return "date";
+  }
+
+  if (NUMERIC_FIELD_TYPES.has(fieldType)) {
+    return "number";
+  }
+
+  return "text";
+}
+
+function setNumberInputAttributes(input, lookup) {
+  if (lookup === "month") {
+    input.step = "1";
+    input.min = "1";
+    input.max = "12";
+    return;
+  }
+
+  if (lookup === "year") {
+    input.step = "1";
+    return;
+  }
+
+  input.step = "any";
+}
+
+function normalizeIsNullConditionValue(value) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  const lowered = normalizeValueItem(value).toLowerCase();
+  if (lowered === "false" || lowered === "0") {
+    return false;
+  }
+  return true;
+}
+
+function normalizeBooleanSelectValue(value) {
+  if (value === null || value === undefined) {
+    return BOOLEAN_NULL_OPTION;
+  }
+
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+
+  const lowered = normalizeValueItem(value).toLowerCase();
+  if (lowered === "true" || lowered === "1") {
+    return "true";
+  }
+  if (lowered === "false" || lowered === "0") {
+    return "false";
+  }
+  if (lowered === "null" || lowered === "none" || lowered.length === 0) {
+    return BOOLEAN_NULL_OPTION;
+  }
+
+  return BOOLEAN_NULL_OPTION;
+}
+
+function parseBooleanSelectValue(value) {
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  return null;
 }
 
 const TRANSFORM_DEFINITIONS = [
@@ -809,8 +966,18 @@ function hydrateCondition(condition) {
   }
   if (Array.isArray(condition.value)) {
     normalized.value = condition.value.map((item) => normalizeValueItem(item));
-  } else if (condition.value !== undefined && condition.value !== null) {
-    normalized.value = normalizeValueItem(condition.value);
+  } else if (condition.value !== undefined) {
+    if (condition.value === null) {
+      normalized.value = null;
+    } else if (
+      typeof condition.value === "string"
+      || typeof condition.value === "number"
+      || typeof condition.value === "boolean"
+    ) {
+      normalized.value = condition.value;
+    } else {
+      normalized.value = normalizeValueItem(condition.value);
+    }
   } else {
     normalized.value = "";
   }
@@ -1808,21 +1975,31 @@ function renderCondition(parentGroup, index) {
   let isConditionRemoveInline = false;
 
   const operatorSpec = resolveOperatorSpec(condition.operator);
+  const conditionFieldType = getConditionFieldType(condition, fieldOptions);
+  const scalarInputKind = resolveScalarInputKind(conditionFieldType, operatorSpec.lookup);
+
   if (operatorSpec.lookup === "range") {
     delete condition.valueRef;
     const values = getConditionRangeValues(condition);
     const valueGroup = document.createElement("div");
     valueGroup.className = "condition-value-group";
+    const rangeInputType =
+      scalarInputKind === "date" || scalarInputKind === "number" ? scalarInputKind : "text";
 
     const startInput = document.createElement("input");
-    startInput.type = "text";
+    startInput.type = rangeInputType;
     startInput.placeholder = "From";
     startInput.value = values[0];
 
     const endInput = document.createElement("input");
-    endInput.type = "text";
+    endInput.type = rangeInputType;
     endInput.placeholder = "To";
     endInput.value = values[1];
+
+    if (rangeInputType === "number") {
+      setNumberInputAttributes(startInput, operatorSpec.lookup);
+      setNumberInputAttributes(endInput, operatorSpec.lookup);
+    }
 
     const syncRangeValues = () => {
       setConditionValueList(condition, [startInput.value, endInput.value]);
@@ -1876,9 +2053,14 @@ function renderCondition(parentGroup, index) {
 
     const valueControls = document.createElement("div");
     valueControls.className = "condition-value-controls";
+    const listInputType =
+      scalarInputKind === "date" || scalarInputKind === "number" ? scalarInputKind : "text";
     const addInput = document.createElement("input");
-    addInput.type = "text";
+    addInput.type = listInputType;
     addInput.placeholder = "Add value";
+    if (listInputType === "number") {
+      setNumberInputAttributes(addInput, operatorSpec.lookup);
+    }
     const addButton = document.createElement("button");
     addButton.type = "button";
     addButton.className = "btn btn-outline btn-sm";
@@ -1906,12 +2088,16 @@ function renderCondition(parentGroup, index) {
     isConditionRemoveInline = true;
     valueGroup.appendChild(valueControls);
     row.appendChild(valueGroup);
+  } else if (operatorSpec.lookup === "isnull") {
+    delete condition.valueRef;
+    condition.value = normalizeIsNullConditionValue(condition.value);
   } else {
     const currentScalarValue = getConditionScalarValue(condition);
     const aliasValueOptions = fieldOptions.filter((option) => option.type === "alias");
     const supportsAliasValueRef = (
       operatorSpec.lookup !== "isnull" && aliasValueOptions.length > 0
     );
+    const shouldRenderAsTextInput = supportsAliasValueRef || scalarInputKind === "text";
     let suggestionList = null;
 
     const syncSuggestionOptions = (typedValue) => {
@@ -1937,40 +2123,69 @@ function renderCondition(parentGroup, index) {
       delete condition.valueRef;
     }
 
-    const valueInput = document.createElement("input");
-    valueInput.type = "text";
-    valueInput.placeholder = "Value";
-    valueInput.value = currentScalarValue;
-
-    if (supportsAliasValueRef) {
-      suggestionList = document.createElement("datalist");
-      suggestionList.className = "condition-variable-suggestions";
-      suggestionList.id = `${condition.id}-value-suggestions`;
-      valueInput.setAttribute("list", suggestionList.id);
-      syncSuggestionOptions(currentScalarValue);
-    }
-
-    valueInput.addEventListener("input", (event) => {
-      const nextValue = event.target.value;
-      const exactAliasMatch = fieldOptions.find((option) => (
-        option.type === "alias" && option.value === normalizeValueItem(nextValue)
-      ));
-
-      condition.value = nextValue;
-      if (exactAliasMatch?.transformId) {
-        condition.valueRef = {
-          type: "alias",
-          transformId: exactAliasMatch.transformId,
-        };
-      } else {
+    if (!shouldRenderAsTextInput && scalarInputKind === "boolean") {
+      const valueSelect = document.createElement("select");
+      [
+        { value: BOOLEAN_NULL_OPTION, label: "Null" },
+        { value: "true", label: "True" },
+        { value: "false", label: "False" },
+      ].forEach((optionDef) => {
+        const option = document.createElement("option");
+        option.value = optionDef.value;
+        option.textContent = optionDef.label;
+        valueSelect.appendChild(option);
+      });
+      valueSelect.value = normalizeBooleanSelectValue(condition.value);
+      valueSelect.addEventListener("change", (event) => {
+        condition.value = parseBooleanSelectValue(event.target.value);
         delete condition.valueRef;
+        updatePreview();
+      });
+      row.appendChild(valueSelect);
+    } else {
+      const valueInput = document.createElement("input");
+      valueInput.type = shouldRenderAsTextInput ? "text" : scalarInputKind;
+      valueInput.placeholder = "Value";
+      valueInput.value = currentScalarValue;
+      if (valueInput.type === "number") {
+        setNumberInputAttributes(valueInput, operatorSpec.lookup);
       }
-      syncSuggestionOptions(nextValue);
-      updatePreview();
-    });
-    row.appendChild(valueInput);
-    if (suggestionList) {
-      row.appendChild(suggestionList);
+
+      if (supportsAliasValueRef && shouldRenderAsTextInput) {
+        suggestionList = document.createElement("datalist");
+        suggestionList.className = "condition-variable-suggestions";
+        suggestionList.id = `${condition.id}-value-suggestions`;
+        valueInput.setAttribute("list", suggestionList.id);
+        syncSuggestionOptions(currentScalarValue);
+      }
+
+      valueInput.addEventListener("input", (event) => {
+        const nextValue = event.target.value;
+        condition.value = nextValue;
+
+        if (supportsAliasValueRef && shouldRenderAsTextInput) {
+          const exactAliasMatch = fieldOptions.find((option) => (
+            option.type === "alias" && option.value === normalizeValueItem(nextValue)
+          ));
+          if (exactAliasMatch?.transformId) {
+            condition.valueRef = {
+              type: "alias",
+              transformId: exactAliasMatch.transformId,
+            };
+          } else {
+            delete condition.valueRef;
+          }
+          syncSuggestionOptions(nextValue);
+        } else {
+          delete condition.valueRef;
+        }
+
+        updatePreview();
+      });
+      row.appendChild(valueInput);
+      if (suggestionList) {
+        row.appendChild(suggestionList);
+      }
     }
   }
   if (!isConditionRemoveInline) {
