@@ -223,6 +223,10 @@
   background: color-mix(in srgb, var(--aqb-danger) 8%, var(--aqb-bg));
 }
 
+.advanced-query-builder-admin .group-container:hover:not(:has(.group-container:hover)) {
+  border-color: var(--header-bg);
+}
+
 .advanced-query-builder-admin .group-header,
 .advanced-query-builder-admin .group-meta {
   display: flex;
@@ -416,6 +420,8 @@
 
 .advanced-query-builder-admin .btn-operator {
   min-width: 4.5rem;
+  justify-content: center;
+  text-align: center;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }

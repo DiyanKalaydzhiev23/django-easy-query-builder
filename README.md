@@ -91,6 +91,10 @@ class CarAdmin(AdvancedSearchAdminMixin, admin.ModelAdmin):
 
 That is enough to enable the query builder UI on that admin changelist.
 
+## 🎥 Video Tutorial
+
+[![Watch the tutorial](https://img.youtube.com/vi/obC-d3T7CZk/maxresdefault.jpg)](https://youtu.be/obC-d3T7CZk)
+
 ## Configuration
 
 ### `advanced_search_fields`
