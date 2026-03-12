@@ -446,7 +446,9 @@
 }
 
 .advanced-query-builder-admin select,
-.advanced-query-builder-admin input[type="text"] {
+.advanced-query-builder-admin input[type="text"],
+.advanced-query-builder-admin input[type="number"],
+.advanced-query-builder-admin input[type="date"] {
   min-height: 2rem;
   border: 1px solid var(--aqb-border);
   border-radius: 6px;
@@ -471,6 +473,11 @@
   flex: 1 1 210px;
 }
 
+.advanced-query-builder-admin input[type="number"],
+.advanced-query-builder-admin input[type="date"] {
+  flex: 1 1 180px;
+}
+
 .advanced-query-builder-admin .condition-value-group {
   display: flex;
   gap: 0.45rem;
@@ -478,7 +485,9 @@
   min-width: 220px;
 }
 
-.advanced-query-builder-admin .condition-value-group input[type="text"] {
+.advanced-query-builder-admin .condition-value-group input[type="text"],
+.advanced-query-builder-admin .condition-value-group input[type="number"],
+.advanced-query-builder-admin .condition-value-group input[type="date"] {
   flex: 1 1 120px;
   min-width: 90px;
 }
@@ -520,7 +529,9 @@
   gap: 0.4rem;
 }
 
-.advanced-query-builder-admin .condition-value-controls input[type="text"] {
+.advanced-query-builder-admin .condition-value-controls input[type="text"],
+.advanced-query-builder-admin .condition-value-controls input[type="number"],
+.advanced-query-builder-admin .condition-value-controls input[type="date"] {
   flex: 1 1 180px;
 }
 
@@ -531,6 +542,8 @@
 
 .advanced-query-builder-admin select:focus,
 .advanced-query-builder-admin input[type="text"]:focus,
+.advanced-query-builder-admin input[type="number"]:focus,
+.advanced-query-builder-admin input[type="date"]:focus,
 .advanced-query-builder-admin .btn:focus {
   outline: 2px solid var(--aqb-focus);
   outline-offset: 1px;
