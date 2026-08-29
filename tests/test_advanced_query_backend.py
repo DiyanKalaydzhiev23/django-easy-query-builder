@@ -46,20 +46,20 @@ LOOKUP_FILTER_CASES = [
 @pytest.mark.django_db
 def test_structured_query_parser_and_builder_filters_people() -> None:
     payload = {
-        "logicalOperator": "AND",
+        "operators": ["AND"],
         "conditions": [
             {"field": "first_name", "operator": "not_equals", "value": "Ivan"},
         ],
         "groups": [
             {
-                "logicalOperator": "OR",
+                "operators": ["OR", "OR"],
                 "conditions": [
                     {"field": "last_name", "operator": "equals", "value": "Petrov"},
                     {"field": "email", "operator": "contains", "value": "example.com"},
                 ],
                 "groups": [
                     {
-                        "logicalOperator": "AND",
+                        "operators": ["AND"],
                         "conditions": [
                             {"field": "age", "operator": "greater_than", "value": "18"},
                             {"field": "age", "operator": "less_than", "value": "65"},
@@ -128,9 +128,84 @@ def test_structured_query_parser_and_builder_filters_people() -> None:
     assert result_ids == {petrov.id, age_match.id, email_match.id}
 
 
+def test_structured_query_parser_and_validator_accepts_nested_relation_payload() -> None:
+    payload = {
+        "operators": ["AND"],
+        "conditions": [
+            {"field": "first_name", "operator": "equals", "value": "Maria"},
+        ],
+        "groups": [
+            {
+                "operators": ["OR", "OR"],
+                "conditions": [
+                    {
+                        "field": "cars.manufacturer.country.name",
+                        "operator": "equals",
+                        "value": "Germany",
+                    },
+                    {
+                        "field": "email",
+                        "operator": "not_contains",
+                        "value": "spam",
+                    },
+                ],
+                "groups": [
+                    {
+                        "operators": ["AND"],
+                        "conditions": [
+                            {
+                                "field": "age",
+                                "operator": "greater_than",
+                                "value": "18",
+                            },
+                            {
+                                "field": "last_name",
+                                "operator": "__ne",
+                                "value": "Test",
+                            },
+                        ],
+                        "groups": [],
+                        "negated": False,
+                    }
+                ],
+                "negated": False,
+            }
+        ],
+        "negated": False,
+    }
+
+    tree = StructuredQueryParser(json.dumps(payload)).parse()
+
+    assert tree == [
+        {"first_name": "Maria"},
+        {"op": "&"},
+        [
+            {"cars__manufacturer__country__name": "Germany"},
+            {"op": "|"},
+            {"not": {"email__contains": "spam"}},
+            {"op": "|"},
+            [
+                {"age__gt": "18"},
+                {"op": "&"},
+                {"not": {"last_name": "Test"}},
+            ],
+        ],
+    ]
+
+    validator = QTreeValidator(
+        [
+            "first_name",
+            "cars__manufacturer__country__name",
+            "email",
+            "age",
+            "last_name",
+        ]
+    )
+    validator.validate(tree)
+
+
 def test_structured_query_parser_rejects_unknown_condition_keys() -> None:
     payload = {
-        "logicalOperator": "AND",
         "conditions": [
             {
                 "field": "first_name",
@@ -149,7 +224,6 @@ def test_structured_query_parser_rejects_unknown_condition_keys() -> None:
 
 def test_structured_query_parser_respects_per_boundary_operators() -> None:
     payload = {
-        "logicalOperator": "AND",
         "operators": ["OR"],
         "conditions": [
             {"field": "first_name", "operator": "equals", "value": "Maria"},
@@ -165,7 +239,6 @@ def test_structured_query_parser_respects_per_boundary_operators() -> None:
 
 def test_structured_query_parser_rejects_invalid_group_operator_boundaries() -> None:
     payload = {
-        "logicalOperator": "AND",
         "operators": ["OR", "AND"],
         "conditions": [
             {"field": "first_name", "operator": "equals", "value": "Maria"},
@@ -181,7 +254,7 @@ def test_structured_query_parser_rejects_invalid_group_operator_boundaries() -> 
 
 def test_structured_query_parser_supports_dunder_lookup_operators() -> None:
     payload = {
-        "logicalOperator": "AND",
+        "operators": ["AND", "AND"],
         "conditions": [
             {"field": "email", "operator": "__icontains", "value": "example.com"},
             {"field": "first_name", "operator": "__eq", "value": "Ivan"},
@@ -203,7 +276,6 @@ def test_structured_query_parser_supports_dunder_lookup_operators() -> None:
 
 def test_structured_query_parser_supports_alias_value_references() -> None:
     payload = {
-        "logicalOperator": "AND",
         "conditions": [
             {
                 "id": "condition-transform",
@@ -267,13 +339,11 @@ def test_structured_query_subquery_exists_filters_related_records() -> None:
     person_two.cars.add(prius)
 
     payload = {
-        "logicalOperator": "AND",
         "conditions": [
             {
                 "field": "cars",
                 "operator": "exists",
                 "query": {
-                    "logicalOperator": "AND",
                     "conditions": [
                         {
                             "field": "manufacturer.country.name",
@@ -328,7 +398,6 @@ def test_admin_mixin_applies_advanced_query_payload() -> None:
     )
 
     payload = {
-        "logicalOperator": "AND",
         "conditions": [
             {"field": "email", "operator": "contains", "value": "example.com"}
         ],
@@ -370,7 +439,6 @@ def test_admin_mixin_rejects_disallowed_lookup_from_admin_configuration() -> Non
     admin_instance = PersonAdmin(Person, admin.site)
 
     payload = {
-        "logicalOperator": "AND",
         "conditions": [
             {"field": "email", "operator": "__icontains", "value": "example.com"}
         ],
@@ -443,7 +511,6 @@ def test_admin_mixin_supports_lookup_matrix_except_in_isnull_range(
     expected_ids = {people_by_label[label] for label in expected_labels}
 
     payload = {
-        "logicalOperator": "AND",
         "conditions": [
             {"field": field, "operator": operator, "value": value},
         ],
@@ -494,7 +561,6 @@ def test_admin_mixin_supports_alias_value_references() -> None:
     older.cars.add(golf, passat)
 
     payload = {
-        "logicalOperator": "AND",
         "conditions": [
             {
                 "id": "condition-transform",
@@ -540,7 +606,6 @@ def test_admin_mixin_supports_scalar_alias_value_references() -> None:
     older = baker.make(Person, age=30)
 
     payload = {
-        "logicalOperator": "AND",
         "conditions": [
             {
                 "id": "condition-transform",
@@ -584,7 +649,6 @@ def test_admin_mixin_rejects_unknown_alias_value_reference() -> None:
     admin_instance = PersonAdmin(Person, admin.site)
 
     payload = {
-        "logicalOperator": "AND",
         "conditions": [
             {
                 "id": "condition-transform",

@@ -877,7 +877,7 @@ function getRenderableItems(group) {
 function ensureGroupOperators(group) {
   const items = getRenderableItems(group);
   const expectedLength = Math.max(items.length - 1, 0);
-  const fallback = group.logicalOperator === "OR" ? "OR" : "AND";
+  const fallback = "AND";
 
   if (!Array.isArray(group.operators)) {
     group.operators = [];
@@ -923,7 +923,6 @@ function generateConditionId() {
 function createGroup() {
   return {
     id: generateGroupId(),
-    logicalOperator: "AND",
     operators: [],
     conditions: [],
     groups: [],
@@ -1038,7 +1037,6 @@ function hydrateGroup(group) {
   if (typeof group.id === "string" && group.id.trim()) {
     normalized.id = group.id;
   }
-  normalized.logicalOperator = group.logicalOperator === "OR" ? "OR" : "AND";
   normalized.negated = Boolean(group.negated);
   if (Array.isArray(group.operators)) {
     normalized.operators = group.operators
@@ -1060,7 +1058,6 @@ function hydrateGroup(group) {
 
 function replaceQueryState(newState) {
   queryState.id = newState.id;
-  queryState.logicalOperator = newState.logicalOperator;
   queryState.operators = Array.isArray(newState.operators) ? [...newState.operators] : [];
   queryState.conditions = newState.conditions;
   queryState.groups = newState.groups;
@@ -1140,7 +1137,6 @@ function serializeGroup(group) {
   const operators = ensureGroupOperators(group);
   return {
     id: group.id,
-    logicalOperator: group.logicalOperator === "OR" ? "OR" : "AND",
     operators,
     negated: Boolean(group.negated),
     conditions: Array.isArray(group.conditions)

@@ -23,7 +23,6 @@ def admin_client(client):
 def _first_name_equals_payload(value: str, suffix: str = "1") -> dict:
     return {
         "id": f"group-{suffix}",
-        "logicalOperator": "AND",
         "operators": [],
         "negated": False,
         "conditions": [

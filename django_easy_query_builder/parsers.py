@@ -171,7 +171,6 @@ class StructuredQueryParser:
 
     _GROUP_KEYS = {
         "id",
-        "logicalOperator",
         "operators",
         "conditions",
         "groups",
@@ -241,22 +240,16 @@ class StructuredQueryParser:
     def _parse_group(self, group: Dict[str, Any]) -> FilterNode:
         self._validate_keys(group, self._GROUP_KEYS, "group")
 
-        logical_operator = group.get("logicalOperator", "AND")
-        if logical_operator not in {"AND", "OR"}:
-            raise SyntaxError("group.logicalOperator must be 'AND' or 'OR'.")
-
         negated = bool(group.get("negated", False))
-        operators = group.get("operators")
-        parsed_operators: Optional[List[str]] = None
-        if operators is not None:
-            if not isinstance(operators, list):
-                raise SyntaxError("group.operators must be a list when provided.")
+        operators = group.get("operators", [])
+        if not isinstance(operators, list):
+            raise SyntaxError("group.operators must be a list.")
 
-            parsed_operators = []
-            for operator in operators:
-                if operator not in {"AND", "OR"}:
-                    raise SyntaxError("group.operators values must be 'AND' or 'OR'.")
-                parsed_operators.append(operator)
+        parsed_operators: List[str] = []
+        for operator in operators:
+            if operator not in {"AND", "OR"}:
+                raise SyntaxError("group.operators values must be 'AND' or 'OR'.")
+            parsed_operators.append(operator)
 
         conditions = group.get("conditions", [])
         if not isinstance(conditions, list):
@@ -280,7 +273,6 @@ class StructuredQueryParser:
 
         return self._combine_items(
             parsed_items,
-            logical_operator,
             negated,
             parsed_operators,
         )
@@ -288,11 +280,10 @@ class StructuredQueryParser:
     def _combine_items(
         self,
         items: List[FilterNode],
-        logical_operator: str,
         negated: bool,
-        operators: Optional[List[str]] = None,
+        operators: List[str],
     ) -> FilterNode:
-        if operators is not None and len(operators) != max(len(items) - 1, 0):
+        if len(operators) != max(len(items) - 1, 0):
             raise SyntaxError(
                 "group.operators length must equal number of item boundaries."
             )
@@ -300,10 +291,7 @@ class StructuredQueryParser:
         combined: List[FilterNode] = []
         for index, item in enumerate(items):
             if index > 0:
-                if operators is None:
-                    operator = logical_operator
-                else:
-                    operator = operators[index - 1]
+                operator = operators[index - 1]
                 symbol = "&" if operator == "AND" else "|"
                 combined.append({"op": symbol})
             combined.append(item)

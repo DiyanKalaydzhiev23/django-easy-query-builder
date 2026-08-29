@@ -23,3 +23,5 @@ class PersonAdmin(AdvancedSearchAdminMixin, admin.ModelAdmin):
         config = super().get_query_builder_frontend_config(request)
         config["enableTransforms"] = True
         return config
+
+

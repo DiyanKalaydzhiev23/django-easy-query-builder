@@ -42,7 +42,7 @@ def test_get_query_builder_frontend_config(admin_instance):
     request = RequestFactory().get(
         "/admin/examples/person/",
         {
-            "advanced_query": '{"logicalOperator":"AND","conditions":[],"groups":[],"negated":false}'
+            "advanced_query": '{"operators":[],"conditions":[],"groups":[],"negated":false}'
         },
     )
 
