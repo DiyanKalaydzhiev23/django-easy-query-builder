@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from django.contrib import messages
 from django.contrib.admin.options import csrf_protect_m
@@ -19,7 +19,6 @@ from django_easy_query_builder.parsers import (
     ALLOWED_DJANGO_OPERATORS,
     DJANGO_OPERATOR_SEQUENCE,
     FilterNode,
-    QueryParser,
     StructuredQueryParser,
 )
 from django_easy_query_builder.project_types import QueryBuilderModelAdminMixinProtocol
@@ -537,27 +536,22 @@ class QueryBuilderAdminMixin:
         structured_payload: Optional[Dict[str, Any]] = None,
         allowed_lookups: Optional[List[str]] = None,
     ) -> FilterNode:
-        stripped = raw_query.strip()
-
+        payload: Union[str, Dict[str, Any]]
         if structured_payload is not None:
-            return StructuredQueryParser(
-                structured_payload,
-                field_types=self.get_allowed_query_field_types(),
-                allowed_django_operators=(
-                    set(allowed_lookups) if allowed_lookups is not None else None
-                ),
-            ).parse()
+            payload = structured_payload
+        else:
+            stripped = raw_query.strip()
+            if not stripped.startswith("{"):
+                raise SyntaxError("Advanced query must be a JSON object.")
+            payload = stripped
 
-        if stripped.startswith("{"):
-            return StructuredQueryParser(
-                stripped,
-                field_types=self.get_allowed_query_field_types(),
-                allowed_django_operators=(
-                    set(allowed_lookups) if allowed_lookups is not None else None
-                ),
-            ).parse()
-
-        return QueryParser(stripped).parse()
+        return StructuredQueryParser(
+            payload,
+            field_types=self.get_allowed_query_field_types(),
+            allowed_django_operators=(
+                set(allowed_lookups) if allowed_lookups is not None else None
+            ),
+        ).parse()
 
     def _build_transform_annotations(
         self,
