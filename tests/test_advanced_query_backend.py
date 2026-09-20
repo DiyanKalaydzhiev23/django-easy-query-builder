@@ -465,6 +465,7 @@ def test_admin_mixin_supports_alias_value_references() -> None:
     class PersonAdmin(QueryBuilderAdminMixin, admin.ModelAdmin):
         model = Person
         advanced_search_fields = ["age", "cars"]
+        advanced_search_enable_transforms = True
 
     admin_instance = PersonAdmin(Person, admin.site)
 
@@ -532,6 +533,7 @@ def test_admin_mixin_supports_scalar_alias_value_references() -> None:
     class PersonAdmin(QueryBuilderAdminMixin, admin.ModelAdmin):
         model = Person
         advanced_search_fields = ["age"]
+        advanced_search_enable_transforms = True
 
     admin_instance = PersonAdmin(Person, admin.site)
 
@@ -580,6 +582,7 @@ def test_admin_mixin_rejects_unknown_alias_value_reference() -> None:
     class PersonAdmin(QueryBuilderAdminMixin, admin.ModelAdmin):
         model = Person
         advanced_search_fields = ["age", "cars"]
+        advanced_search_enable_transforms = True
 
     admin_instance = PersonAdmin(Person, admin.site)
 
