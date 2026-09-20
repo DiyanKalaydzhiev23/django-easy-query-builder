@@ -34,6 +34,7 @@ class QueryBuilderAdminMixin:
     query_builder_fields: List[str] = []
     advanced_search_fields: List[str] = []
     advanced_search_lookups: List[str] = ["__all__"]
+    advanced_search_enable_transforms: bool = False
     advanced_query_param: str = "advanced_query"
     saved_view_param: str = "saved_view"
     change_list_template: str = "admin/django_easy_query_builder/change_list.html"
@@ -113,6 +114,9 @@ class QueryBuilderAdminMixin:
 
         return [lookup for lookup in DJANGO_OPERATOR_SEQUENCE if lookup in selected]
 
+    def get_advanced_search_enable_transforms(self, request: HttpRequest) -> bool:
+        return bool(self.advanced_search_enable_transforms)
+
     def get_query_builder_fields_mapping(
         self: QueryBuilderModelAdminMixinProtocol,
     ) -> List[Dict[str, Any]]:
@@ -157,6 +161,7 @@ class QueryBuilderAdminMixin:
             transform_catalog: Optional[Dict[str, Dict[str, str]]] = None
 
             if structured_payload is not None:
+                self._validate_transforms_enabled(request, structured_payload)
                 transform_catalog, alias_definitions = self._collect_transform_catalog(
                     structured_payload
                 )
@@ -256,7 +261,7 @@ class QueryBuilderAdminMixin:
             "availableLookups": self.get_allowed_query_lookups(),
             "queryParam": self.advanced_query_param,
             "initialQuery": request.GET.get(self.advanced_query_param, ""),
-            "enableTransforms": False,
+            "enableTransforms": self.get_advanced_search_enable_transforms(request),
             "saveQueryUrl": self.get_save_query_url(request),
             "savedQueryHashes": self.get_saved_query_hashes(),
             "savedQueries": self.get_saved_queries(),
@@ -360,6 +365,7 @@ class QueryBuilderAdminMixin:
                 self._parse_save_query_request(request)
             )
             allowed_lookups = self.get_allowed_query_lookups()
+            self._validate_transforms_enabled(request, structured_payload)
 
             transform_catalog, alias_definitions = self._collect_transform_catalog(
                 structured_payload
@@ -530,6 +536,48 @@ class QueryBuilderAdminMixin:
         if not isinstance(payload, dict):
             raise SyntaxError("Advanced query JSON payload must be an object.")
         return payload
+
+    def _validate_transforms_enabled(
+        self,
+        request: HttpRequest,
+        structured_payload: Dict[str, Any],
+    ) -> None:
+        if self.get_advanced_search_enable_transforms(request):
+            return
+
+        if self._payload_uses_transforms(structured_payload):
+            raise SyntaxError("Transforms are not enabled for this admin.")
+
+    def _payload_uses_transforms(self, group: Dict[str, Any]) -> bool:
+        conditions = group.get("conditions", [])
+        if not isinstance(conditions, list):
+            return False
+
+        for condition in conditions:
+            if not isinstance(condition, dict):
+                continue
+
+            transforms = condition.get("transforms")
+            if isinstance(transforms, list) and transforms:
+                return True
+
+            if condition.get("fieldRef") is not None:
+                return True
+
+            if condition.get("valueRef") is not None:
+                return True
+
+        child_groups = group.get("groups", [])
+        if not isinstance(child_groups, list):
+            return False
+
+        for child_group in child_groups:
+            if isinstance(child_group, dict) and self._payload_uses_transforms(
+                child_group
+            ):
+                return True
+
+        return False
 
     def _parse_advanced_query(
         self,
@@ -1199,9 +1247,6 @@ class QueryBuilderAdminMixin:
         return current_field
 
     def _field_type_name(self, field: object) -> str:
-        get_internal_type = getattr(field, "get_internal_type", None)
-        if callable(get_internal_type):
-            return get_internal_type()
         return field.__class__.__name__
 
 

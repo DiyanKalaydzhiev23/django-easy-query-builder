@@ -1,5 +1,8 @@
+import json
+
 import pytest
 from django.contrib import admin
+from django.core.exceptions import SuspiciousOperation
 from django.test import RequestFactory
 
 from django_easy_query_builder.mixins import QueryBuilderAdminMixin
@@ -56,6 +59,52 @@ def test_get_query_builder_frontend_config(admin_instance):
     assert config["availableLookups"] == list(DJANGO_OPERATOR_SEQUENCE)
     assert config["initialQuery"].startswith("{")
     assert config["enableTransforms"] is False
+
+
+def test_transform_configuration_attribute_is_exposed_to_frontend():
+    class TestAdmin(QueryBuilderAdminMixin, admin.ModelAdmin):
+        model = Person
+        query_builder_fields = ["age", "cars"]
+        advanced_search_enable_transforms = True
+
+    admin_instance = TestAdmin(Person, admin.site)
+    request = RequestFactory().get("/admin/examples/person/")
+    config = admin_instance.get_query_builder_frontend_config(request)
+
+    assert config["enableTransforms"] is True
+
+
+def test_disabled_transforms_reject_transform_payload():
+    class TestAdmin(QueryBuilderAdminMixin, admin.ModelAdmin):
+        model = Person
+        query_builder_fields = ["age", "cars"]
+
+    payload = {
+        "id": "group-1",
+        "logicalOperator": "AND",
+        "conditions": [
+            {
+                "id": "condition-transform",
+                "field": "cars",
+                "operator": "equals",
+                "value": "",
+                "negated": False,
+                "isVariableOnly": True,
+                "transforms": [{"id": "transform-count-cars", "value": "count"}],
+            }
+        ],
+        "groups": [],
+        "negated": False,
+    }
+
+    admin_instance = TestAdmin(Person, admin.site)
+    request = RequestFactory().get(
+        "/admin/examples/person/",
+        {"advanced_query": json.dumps(payload)},
+    )
+
+    with pytest.raises(SuspiciousOperation, match="Transforms are not enabled"):
+        admin_instance.get_queryset(request)
 
 
 def test_get_query_builder_frontend_config_includes_nested_field_types():
